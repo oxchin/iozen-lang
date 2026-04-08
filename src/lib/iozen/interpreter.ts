@@ -17,7 +17,8 @@ import type {
   IndexAccessNode, ListLiteralNode, HasValueNode, ValueInsideNode,
   LambdaNode, ExitNode, MatchNode, MatchCaseNode, TryCatchNode, ThrowNode,
   PipelineExprNode, DestructureNode, MapLiteralNode, ListCompNode,
-  TernaryExprNode, CompoundAssignNode,
+  TernaryExprNode, CompoundAssignNode, ModuleDeclNode, UnionDeclNode,
+  SafeAccessNode, TypeAliasNode,
 } from './ast';
 
 // Special signal to unwind the call stack for return/exit
@@ -32,6 +33,8 @@ class ThrowSignal {
 class ExitSignal {
   constructor(public target: string | null) {}
 }
+
+class ContinueSignal {}
 
 export class Interpreter {
   private env: Environment;
@@ -136,6 +139,8 @@ export class Interpreter {
       case 'Exit':
         this.execExit(node as ExitNode);
         break;
+      case 'Continue':
+        throw new ContinueSignal();
       case 'Match':
         this.execMatch(node as MatchNode, env);
         break;
@@ -165,6 +170,15 @@ export class Interpreter {
         break;
       case 'CompoundAssign':
         this.execCompoundAssign(node as CompoundAssignNode, env);
+        break;
+      case 'ModuleDecl':
+        this.execModuleDecl(node as ModuleDeclNode, env);
+        break;
+      case 'UnionDecl':
+        this.execUnionDecl(node as UnionDeclNode, env);
+        break;
+      case 'TypeAlias':
+        // Type aliases are no-ops at runtime (for future type checking)
         break;
       default:
         // If it's an expression, evaluate it (side effects)
@@ -396,6 +410,42 @@ export class Interpreter {
         __iozen_type: 'function',
         name: enumCase.name,
         parameters: enumCase.fields.map(f => ({ name: f.name, typeName: f.typeName, qualifiers: [] })),
+        returnType: node.name,
+        body: [],
+        closure: env,
+      });
+    }
+  }
+
+  private execModuleDecl(node: ModuleDeclNode, env: Environment): void {
+    // Execute module body in a child environment
+    const moduleEnv = env.child();
+    this.executeBlock(node.body, moduleEnv);
+
+    // Only expose declared names into parent scope
+    if (node.exposedNames.length > 0) {
+      for (const name of node.exposedNames) {
+        if (moduleEnv.has(name)) {
+          env.define(name, moduleEnv.get(name));
+        }
+      }
+    } else {
+      // If no expose clause, expose everything (public by default)
+      for (const name of moduleEnv.names()) {
+        if (!name.startsWith('__')) {
+          env.define(name, moduleEnv.get(name));
+        }
+      }
+    }
+  }
+
+  private execUnionDecl(node: UnionDeclNode, env: Environment): void {
+    // Create constructor functions for each variant
+    for (const variant of node.variants) {
+      env.define(variant.name, {
+        __iozen_type: 'function',
+        name: variant.name,
+        parameters: variant.typeName !== 'nothing' ? [{ name: 'value', typeName: variant.typeName, qualifiers: [] }] : [],
         returnType: node.name,
         body: [],
         closure: env,
@@ -637,6 +687,9 @@ export class Interpreter {
           if (e.target === node.label || !e.target) break;
           throw e; // re-throw if targeting outer loop
         }
+        if (e instanceof ContinueSignal) {
+          continue; // skip rest of loop body, go to next iteration
+        }
         throw e;
       }
     }
@@ -650,6 +703,9 @@ export class Interpreter {
         if (e instanceof ExitSignal) {
           if (!e.target) break; // untargeted exit breaks the while loop
           throw e; // targeted exit re-thrown for outer loops
+        }
+        if (e instanceof ContinueSignal) {
+          continue; // skip rest of loop body, go to next iteration
         }
         throw e;
       }
@@ -674,6 +730,9 @@ export class Interpreter {
             if (!e.target) break;
             throw e;
           }
+          if (e instanceof ContinueSignal) {
+            continue;
+          }
           throw e;
         }
       }
@@ -692,6 +751,9 @@ export class Interpreter {
             if (!e.target) break;
             throw e;
           }
+          if (e instanceof ContinueSignal) {
+            continue;
+          }
           throw e;
         }
       }
@@ -709,6 +771,7 @@ export class Interpreter {
           this.executeBlock(node.body, childEnv);
         } catch (e) {
           if (e instanceof ExitSignal) { if (!e.target) break; throw e; }
+          if (e instanceof ContinueSignal) { continue; }
           throw e;
         }
       }
@@ -926,6 +989,18 @@ export class Interpreter {
 
       case 'Match': {
         return this.evalMatch(node as MatchNode, env);
+      }
+
+      case 'SafeAccess': {
+        const s = node as SafeAccessNode;
+        const obj = this.evaluate(s.object, env);
+        if (obj === null || obj === undefined) {
+          return null; // Safe access returns nothing on null
+        }
+        if (typeof obj === 'object' && s.field in obj) {
+          return (obj as Record<string, IOZENValue>)[s.field];
+        }
+        return null; // Safe access returns nothing if field doesn't exist
       }
 
       case 'Throw': {

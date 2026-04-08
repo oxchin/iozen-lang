@@ -60,6 +60,7 @@ export enum TokenType {
   In = 'In',
   Label = 'Label',
   Exit = 'Exit',
+  Continue = 'Continue',
   Try = 'Try',
   Catch = 'Catch',
   Throw = 'Throw',
@@ -82,6 +83,8 @@ export enum TokenType {
   StarAssign = 'StarAssign',
   SlashAssign = 'SlashAssign',
   PercentAssign = 'PercentAssign',
+  OptionalDot = 'OptionalDot',
+  QuestionMark = 'QuestionMark',
 
   // --- Type qualifiers ---
   As = 'As',
@@ -208,6 +211,7 @@ export const KEYWORDS: Record<string, TokenType> = {
   'in': TokenType.In,
   'label': TokenType.Label,
   'exit': TokenType.Exit,
+  'continue': TokenType.Continue,
   'try': TokenType.Try,
   'catch': TokenType.Catch,
   'throw': TokenType.Throw,
@@ -299,6 +303,8 @@ export const SYMBOLS: Record<string, TokenType> = {
   '*=': TokenType.StarAssign,
   '/=': TokenType.SlashAssign,
   '%=': TokenType.PercentAssign,
+  '?.': TokenType.OptionalDot,
+  '?': TokenType.QuestionMark,
 };
 
 export function tokenToString(token: Token): string {

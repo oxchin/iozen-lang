@@ -9,14 +9,15 @@ import type {
   FunctionParamNode, StructureDeclNode, FieldNode, EnumDeclNode,
   EnumCaseNode, PrintStmtNode, ReturnStmtNode, WhenNode,
   WhenBranchNode, CheckNode, CheckCaseNode, RepeatNode,
-  WhileNode, ForEachNode, LabelNode, ExitNode, IncreaseNode,
+  WhileNode, ForEachNode, LabelNode, ExitNode, ContinueNode, IncreaseNode,
   SetFieldNode, FunctionCallStmtNode, BlockNode, BinaryExprNode,
   UnaryExprNode, AttachExprNode, IdentifierNode, LiteralNode,
   FunctionCallExprNode, MemberAccessNode, ListLiteralNode, MapLiteralNode,
   ListCompNode, TernaryExprNode, CompoundAssignNode,
   ForceUnwrapNode, OrDefaultNode, HasValueNode, ValueInsideNode,
   LambdaNode, MatchNode, MatchCaseNode, TryCatchNode, ThrowNode,
-  PipelineExprNode, DestructureNode,
+  PipelineExprNode, DestructureNode, ModuleDeclNode, UnionDeclNode,
+  SafeAccessNode, TypeAliasNode,
 } from './ast';
 
 export class ParseError extends Error {
@@ -93,6 +94,8 @@ export class Parser {
         return this.parseLabel();
       case TokenType.Exit:
         return this.parseExit();
+      case TokenType.Continue:
+        return this.parseContinue();
       case TokenType.Match:
         return this.parseMatch();
       case TokenType.Try:
@@ -107,6 +110,8 @@ export class Parser {
         return this.parseSetField();
       case TokenType.Unsafe:
         return this.parseUnsafeBlock();
+      case TokenType.Module:
+        return this.parseModule();
       default:
         // Try to parse as expression statement (function call)
         return this.parseExpressionStatement();
@@ -367,9 +372,13 @@ export class Parser {
       return this.parseStructureDecl();
     } else if (next.type === TokenType.Enum) {
       return this.parseEnumDecl();
+    } else if (next.type === TokenType.Union) {
+      return this.parseUnionDecl();
+    } else if (next.type === TokenType.Type) {
+      return this.parseTypeAlias();
     }
 
-    throw new ParseError('Expected "structure" or "enum" after "define"', this.peek());
+    throw new ParseError('Expected "structure", "enum", "union", or "type" after "define"', this.peek());
   }
 
   private parseStructureDecl(): ASTNode {
@@ -572,6 +581,11 @@ export class Parser {
     return { kind: 'Exit', target } as ExitNode;
   }
 
+  private parseContinue(): ASTNode {
+    this.consume(TokenType.Continue, 'Expected "continue"');
+    return { kind: 'Continue' } as ContinueNode;
+  }
+
   private parseMatch(): ASTNode {
     this.consume(TokenType.Match, 'Expected "match"');
     const subject = this.parseExpression();
@@ -750,6 +764,61 @@ export class Parser {
     this.consume(TokenType.End, 'Expected "end" to close unsafe block');
 
     return { kind: 'Block', statements } as BlockNode;
+  }
+
+  private parseModule(): ASTNode {
+    this.consume(TokenType.Module, 'Expected "module"');
+    const name = this.consume(TokenType.Identifier, 'Expected module name').value;
+
+    // Parse exposed names: expose name1, name2, ...
+    const exposedNames: string[] = [];
+    if (this.check(TokenType.Expose)) {
+      this.advance(); // consume "expose"
+      while (true) {
+        exposedNames.push(this.consume(TokenType.Identifier, 'Expected exposed name').value);
+        if (!this.match(TokenType.Comma)) break;
+      }
+    }
+
+    // Module body: statements until "end"
+    const body: ASTNode[] = [];
+    while (!this.check(TokenType.End) && !this.isAtEnd()) {
+      const stmt = this.parseStatement();
+      if (stmt) body.push(stmt);
+    }
+    this.consume(TokenType.End, 'Expected "end" to close module');
+
+    return { kind: 'ModuleDecl', name, exposedNames, body } as ModuleDeclNode;
+  }
+
+  private parseUnionDecl(): ASTNode {
+    this.consume(TokenType.Define, 'Expected "define"');
+    this.consume(TokenType.Union, 'Expected "union"');
+    const name = this.consume(TokenType.Identifier, 'Expected union name').value;
+
+    const variants: { name: string; typeName: string }[] = [];
+    while (this.check(TokenType.Case) && !this.isAtEnd()) {
+      this.consume(TokenType.Case, 'Expected "case"');
+      const variantName = this.consume(TokenType.Identifier, 'Expected variant name').value;
+      let typeName = 'nothing';
+      if (this.match(TokenType.As)) {
+        typeName = this.parseTypeName();
+      }
+      variants.push({ name: variantName, typeName });
+    }
+
+    this.consume(TokenType.End, 'Expected "end" to close union');
+    return { kind: 'UnionDecl', name, variants } as UnionDeclNode;
+  }
+
+  private parseTypeAlias(): ASTNode {
+    this.consume(TokenType.Define, 'Expected "define"');
+    this.consume(TokenType.Type, 'Expected "type"');
+    const name = this.consume(TokenType.Identifier, 'Expected type alias name').value;
+    this.consume(TokenType.As, 'Expected "as"');
+    const targetType = this.parseTypeName();
+    this.consume(TokenType.End, 'Expected "end" to close type alias');
+    return { kind: 'TypeAlias', name, targetType } as TypeAliasNode;
   }
 
   private parseExpressionStatement(): ASTNode | null {
@@ -1039,11 +1108,34 @@ export class Parser {
         continue;
       }
 
+      // Function call with "with": expr with arg1 and arg2
+      if (this.check(TokenType.With) && expr.kind === 'Identifier') {
+        this.advance(); // consume "with"
+        const args: ASTNode[] = [];
+        // Parse first argument (use parseOr to avoid consuming "and" separators)
+        args.push(this.parseOr());
+        // Parse additional arguments separated by "and"
+        while (this.check(TokenType.And)) {
+          this.advance(); // consume "and"
+          args.push(this.parseOr());
+        }
+        expr = { kind: 'FunctionCallExpr', name: (expr as IdentifierNode).name, arguments: args } as FunctionCallExprNode;
+        continue;
+      }
+
       // Member access: expr.field
       if (this.check(TokenType.Dot)) {
         this.advance();
         const field = this.consume(TokenType.Identifier, 'Expected field name').value;
         expr = { kind: 'MemberAccess', object: expr, field } as MemberAccessNode;
+        continue;
+      }
+
+      // Safe member access: expr?.field
+      if (this.check(TokenType.OptionalDot)) {
+        this.advance();
+        const field = this.consume(TokenType.Identifier, 'Expected field name').value;
+        expr = { kind: 'SafeAccess', object: expr, field } as SafeAccessNode;
         continue;
       }
 

@@ -19,6 +19,7 @@ export type ASTNode =
   | ForEachNode
   | LabelNode
   | ExitNode
+  | ContinueNode
   | IncreaseNode
   | SetFieldNode
   | AssignVarNode
@@ -47,7 +48,11 @@ export type ASTNode =
   | TryCatchNode
   | ThrowNode
   | PipelineExprNode
-  | DestructureNode;
+  | DestructureNode
+  | ModuleDeclNode
+  | UnionDeclNode
+  | SafeAccessNode
+  | TypeAliasNode;
 
 // ---- Program ----
 export interface ProgramNode {
@@ -175,6 +180,10 @@ export interface LabelNode {
 export interface ExitNode {
   kind: 'Exit';
   target: string | null;
+}
+
+export interface ContinueNode {
+  kind: 'Continue';
 }
 
 export interface IncreaseNode {
@@ -305,6 +314,35 @@ export interface HasValueNode {
 export interface ValueInsideNode {
   kind: 'ValueInside';
   expression: ASTNode;
+}
+
+// ---- Module Declaration ----
+export interface ModuleDeclNode {
+  kind: 'ModuleDecl';
+  name: string;
+  exposedNames: string[];
+  body: ASTNode[];
+}
+
+// ---- Union Type ----
+export interface UnionDeclNode {
+  kind: 'UnionDecl';
+  name: string;
+  variants: { name: string; typeName: string }[];
+}
+
+// ---- Safe Access (Optional Chaining) ----
+export interface SafeAccessNode {
+  kind: 'SafeAccess';
+  object: ASTNode;
+  field: string;
+}
+
+// ---- Type Alias ----
+export interface TypeAliasNode {
+  kind: 'TypeAlias';
+  name: string;
+  targetType: string;
 }
 
 // ---- Destructuring ----

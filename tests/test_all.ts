@@ -1791,6 +1791,217 @@ print result`);
 });
 
 // ============================================================
+// CONTINUE KEYWORD TESTS
+// ============================================================
+
+console.log('\n\x1b[1m\x1b[36mContinue Keyword Tests\x1b[0m');
+
+test('continue: skip iteration in while loop', () => {
+  const r = run(`create variable sum as integer with value 0
+create variable i as integer with value 0
+while i < 5 do
+    when i equals 2 do
+        increase i by 1
+        continue
+    end
+    set sum to sum + i
+    increase i by 1
+end
+print sum`);
+  assertEqual(r.errors.length, 0);
+  // i goes 0,1,2(skip),3,4 => sum = 0+1+3+4 = 8
+  assertIncludes(r.output, '8');
+});
+
+test('continue: skip in repeat loop', () => {
+  const r = run(`create variable sum as integer with value 0
+create variable idx as integer with value 0
+repeat 5 times do
+    when idx equals 3 do
+        set idx to idx + 1
+        continue
+    end
+    set sum to sum + idx
+    set idx to idx + 1
+end
+print sum`);
+  assertEqual(r.errors.length, 0);
+  // idx: 0,1,2,3(skip),4 => sum = 0+1+2+4 = 7
+  assertIncludes(r.output, '7');
+});
+
+test('continue: skip in for-each loop', () => {
+  const r = run(`create variable items as list with value [10, 20, 30, 40, 50]
+create variable sum as integer with value 0
+for each item in items do
+    when item equals 30 do
+        continue
+    end
+    set sum to sum + item
+end
+print sum`);
+  assertEqual(r.errors.length, 0);
+  // 10+20+40+50 = 120
+  assertIncludes(r.output, '120');
+});
+
+test('continue: multiple continues in one loop', () => {
+  const r = run(`create variable sum as integer with value 0
+create variable i as integer with value 0
+while i < 7 do
+    when i equals 1 do
+        increase i by 1
+        continue
+    end
+    when i equals 3 do
+        increase i by 1
+        continue
+    end
+    when i equals 5 do
+        increase i by 1
+        continue
+    end
+    set sum to sum + i
+    increase i by 1
+end
+print sum`);
+  assertEqual(r.errors.length, 0);
+  // i: 0,1(skip),2,3(skip),4,5(skip),6 => sum = 0+2+4+6 = 12
+  assertIncludes(r.output, '12');
+});
+
+test('continue: continue in nested when inside loop', () => {
+  const r = run(`create variable count as integer with value 0
+create variable i as integer with value 0
+while i < 6 do
+    when i equals 0 do
+        set count to count + 1
+    otherwise when i equals 2 do
+        set count to count + 1
+    otherwise when i equals 4 do
+        increase i by 1
+        continue
+    end
+    increase i by 1
+end
+print count`);
+  assertEqual(r.errors.length, 0);
+  // i=0: count=1, i=1: nothing, i=2: count=2, i=3: nothing, i=4: skip (continue), i=5: nothing
+  assertIncludes(r.output, '2');
+});
+
+test('continue: continue at end of loop body is no-op', () => {
+  const r = run(`create variable sum as integer with value 0
+create variable i as integer with value 0
+while i < 3 do
+    set sum to sum + i
+    increase i by 1
+    continue
+end
+print sum`);
+  assertEqual(r.errors.length, 0);
+  // continue at end has no effect: 0+1+2 = 3
+  assertIncludes(r.output, '3');
+});
+
+// ============================================================
+// WITH-CALL FUNCTION TESTS
+// ============================================================
+
+console.log('\n\x1b[1m\x1b[36mWith-Call Function Tests\x1b[0m');
+
+test('with-call: basic function call with "with"', () => {
+  const r = run(`function add with a as integer and b as integer returns integer
+    return a + b
+end
+create variable result as integer with value add with 3 and 5
+print result`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '8');
+});
+
+test('with-call: single argument', () => {
+  const r = run(`function double with x as integer returns integer
+    return x * 2
+end
+create variable result as integer with value double with 7
+print result`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '14');
+});
+
+test('with-call: nested with-calls via temp variable', () => {
+  const r = run(`function square with x as integer returns integer
+    return x * x
+end
+function add with a as integer and b as integer returns integer
+    return a + b
+end
+create variable squared as integer with value square with 3
+create variable result as integer with value add with squared and 2
+print result`);
+  assertEqual(r.errors.length, 0);
+  // square(3) = 9, add(9, 2) = 11
+  assertIncludes(r.output, '11');
+});
+
+test('with-call: with-call in expression context', () => {
+  const r = run(`function add with a as integer and b as integer returns integer
+    return a + b
+end
+print add with 1 and 2 attach " + " attach add with 3 and 4`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '3 + 7');
+});
+
+// ============================================================
+// EQUALS COMPARISON KEYWORD TESTS
+// ============================================================
+
+console.log('\n\x1b[1m\x1b[36mEquals Comparison Keyword Tests\x1b[0m');
+
+test('equals: equals as comparison operator in print', () => {
+  const r = run(`create variable x as text with value "hello"
+print x equals "hello"
+print x equals "world"`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('equals: equals in when condition', () => {
+  const r = run(`create variable color as text with value "green"
+when color equals "red" do
+    print "stop"
+otherwise when color equals "green" do
+    print "go"
+otherwise do
+    print "unknown"
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'go');
+  assertNotIncludes(r.output, 'stop');
+});
+
+test('equals: not equals via != operator', () => {
+  const r = run(`create variable x as integer with value 10
+print x != 20
+print x != 10`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('equals: not equals via logical not', () => {
+  const r = run(`create variable x as integer with value 10
+print not (x equals 20)
+print not (x equals 10)`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+// ============================================================
 // SUMMARY
 // ============================================================
 

@@ -10,7 +10,17 @@
 # Input: token list (each token is [type, value, line, col])
 create variable tokens as list with value [
     ["IDENT", "print", 1, 1],
-    ["STR", "Hello, World!", 1, 7]
+    ["STR", "Hello from self-hosting parser!", 1, 7],
+    ["IDENT", "create", 2, 1],
+    ["IDENT", "variable", 2, 8],
+    ["IDENT", "x", 2, 17],
+    ["IDENT", "as", 2, 19],
+    ["IDENT", "integer", 2, 22],
+    ["IDENT", "with", 2, 30],
+    ["IDENT", "value", 2, 35],
+    ["INT", "42", 2, 41],
+    ["IDENT", "print", 3, 1],
+    ["IDENT", "x", 3, 7]
 ]
 create variable pos as integer with value 0
 
@@ -49,7 +59,7 @@ end
 
 function tok_expect with expected_type as text returns list
     create variable t as list with value peek()
-    when t[0] equals expected_type do
+    when t[0] equals expected_type or t[1] equals expected_type do
         return advance()
     end
     print "Parse Error: expected " attach expected_type attach " but got " attach t[0] attach " at line " attach t[2]
@@ -181,7 +191,7 @@ function parse_primary() returns map
 
     when tok[1] equals "nothing" do
         advance()
-        return map("kind", "Literal", "type", "nothing", "value", null)
+        return map("kind", "Literal", "type", "nothing", "value", nothing)
     end
 
     when tok_is with "LBRACK" do
@@ -276,6 +286,18 @@ function parse_statement() returns map
     when tok[1] equals "set" do
         return parse_set()
     end
+    when tok[1] equals "match" do
+        return parse_match_stmt()
+    end
+    when tok[1] equals "try" do
+        return parse_try_catch()
+    end
+    when tok[1] equals "throw" do
+        return parse_throw_stmt()
+    end
+    when tok[1] equals "import" do
+        return parse_import_stmt()
+    end
 
     return parse_expr_stmt()
 end
@@ -317,7 +339,7 @@ function parse_var_decl with is_const as boolean returns map
         end
     end
 
-    create variable val as map with value map("kind", "Literal", "type", "nothing", "value", null)
+    create variable val as map with value map("kind", "Literal", "type", "nothing", "value", nothing)
     when tok_eat with "with" do
         when tok_is with "IDENT" do
             create variable next as list with value peek_ahead with 1
@@ -397,8 +419,11 @@ function parse_define() returns map
     when nxt[1] equals "enum" do
         return parse_enum_decl()
     end
+    when nxt[1] equals "union" do
+        return parse_define_union()
+    end
     tok_expect with "define"
-    return map("kind", "Error", "message", "Expected structure or enum")
+    return map("kind", "Error", "message", "Expected structure, enum, or union")
 end
 
 function parse_struct_decl() returns map
@@ -453,7 +478,7 @@ function parse_when() returns map
         end
     end
     tok_expect with "end"
-    return map("kind", "When", "branches", branches, "otherwise", null)
+    return map("kind", "When", "branches", branches, "otherwise", nothing)
 end
 
 function parse_while() returns map
@@ -489,7 +514,7 @@ end
 
 function parse_return() returns map
     tok_expect with "return"
-    create variable val as map with value map("kind", "Literal", "type", "nothing", "value", null)
+    create variable val as map with value map("kind", "Literal", "type", "nothing", "value", nothing)
     when not tok_is with "end" and not tok_is with "otherwise" and not tok_done() do
         set val to parse_expression()
     end
@@ -537,6 +562,79 @@ function parse_expr_stmt() returns map
         return map("kind", "FunctionCallStmt", "name", get_key(expr, "name"), "arguments", [])
     end
     return expr
+end
+
+function parse_match_stmt() returns map
+    tok_expect with "match"
+    create variable subject as map with value parse_expression()
+    create variable cases as list with value []
+    create variable otherwise_body as list with value []
+    create variable has_otherwise as boolean with value false
+    while tok_is with "case" or tok_is with "otherwise" do
+        when tok_is with "case" do
+            advance()
+            create variable pattern as map with value parse_primary()
+            tok_expect with "do"
+            create variable body as list with value parse_block_body()
+            tok_expect with "end"
+            push(cases, map("kind", "MatchCase", "pattern", pattern, "body", body))
+        otherwise do
+            advance()
+            tok_expect with "do"
+            set otherwise_body to parse_block_body()
+            tok_expect with "end"
+            set has_otherwise to true
+        end
+    end
+    return map("kind", "Match", "subject", subject, "cases", cases, "otherwise", otherwise_body)
+end
+
+function parse_try_catch() returns map
+    tok_expect with "try"
+    tok_expect with "do"
+    create variable try_body as list with value parse_block_body()
+    tok_eat with "end"
+    tok_expect with "catch"
+    create variable binding as text with value ""
+    when not tok_is with "do" do
+        set binding to peek()[1]
+        advance()
+    end
+    tok_expect with "do"
+    create variable catch_body as list with value parse_block_body()
+    tok_expect with "end"
+    return map("kind", "TryCatch", "tryBody", try_body, "catchBinding", binding, "catchBody", catch_body)
+end
+
+function parse_throw_stmt() returns map
+    tok_expect with "throw"
+    create variable val as map with value parse_expression()
+    return map("kind", "Throw", "value", val)
+end
+
+function parse_import_stmt() returns map
+    tok_expect with "import"
+    create variable path as list with value tok_expect with "STR"
+    return map("kind", "Import", "modulePath", path[1], "importNames", [])
+end
+
+function parse_define_union() returns map
+    tok_expect with "define"
+    tok_expect with "union"
+    create variable name as list with value tok_expect with "IDENT"
+    create variable variants as list with value []
+    while tok_is with "case" do
+        advance()
+        create variable vn as list with value tok_expect with "IDENT"
+        create variable vt as text with value "nothing"
+        when tok_eat with "as" do
+            set vt to peek()[1]
+            advance()
+        end
+        push(variants, map("name", vn[1], "typeName", vt))
+    end
+    tok_expect with "end"
+    return map("kind", "UnionDecl", "name", name[1], "variants", variants)
 end
 
 function parse_block_body() returns list

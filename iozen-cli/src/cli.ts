@@ -456,7 +456,7 @@ function cmdEval(args: string[]): Promise<void> {
   }
 }
 
-function cmdRepl(): Promise<void> {
+async function cmdRepl(): Promise<void> {
   const { createInterface } = await import('node:readline');
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
