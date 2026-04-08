@@ -1326,6 +1326,349 @@ test('slice with 2 args (from index to end)', () => {
 });
 
 // ============================================================
+// MATCH EXPRESSION TESTS
+// ============================================================
+
+console.log('\n\x1b[1m\x1b[36mMatch Expression Tests\x1b[0m');
+
+test('match: literal integer pattern', () => {
+  const r = run(`create variable x as integer with value 2
+match x
+  case 1 do
+    print "one"
+  end
+  case 2 do
+    print "two"
+  end
+  case 3 do
+    print "three"
+  end
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'two');
+  assertNotIncludes(r.output, 'one');
+  assertNotIncludes(r.output, 'three');
+});
+
+test('match: string pattern', () => {
+  const r = run(`create variable color as text with value "green"
+match color
+  case "red" do
+    print "fire"
+  end
+  case "green" do
+    print "nature"
+  end
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'nature');
+});
+
+test('match: wildcard _ pattern', () => {
+  const r = run(`create variable x as integer with value 999
+match x
+  case 1 do
+    print "low"
+  end
+  case _ do
+    print "default"
+  end
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'default');
+});
+
+test('match: catch-all binding', () => {
+  const r = run(`create variable x as integer with value 42
+match x
+  case 0 do
+    print "zero"
+  end
+  case n do
+    print "got value"
+    print n
+  end
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'got value');
+  assertIncludes(r.output, '42');
+});
+
+test('match: with otherwise', () => {
+  const r = run(`create variable x as integer with value 99
+match x
+  case 1 do
+    print "small"
+  end
+  otherwise do
+    print "big"
+  end
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'big');
+});
+
+test('match: as expression returning value', () => {
+  const r = run(`function get_label with x as integer returns text
+  create variable label with value match x
+    case 1 do
+      create variable result with value "one"
+    end
+    case 2 do
+      create variable result with value "two"
+    end
+    case 3 do
+      create variable result with value "three"
+    end
+    case _ do
+      create variable result with value "unknown"
+    end
+  end
+  return result
+end
+print get_label with 3`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'three');
+});
+
+// ============================================================
+// TRY/CATCH TESTS
+// ============================================================
+
+console.log('\n\x1b[1m\x1b[36mTry/Catch Tests\x1b[0m');
+
+test('try/catch: catch thrown value', () => {
+  const r = run(`try do
+  throw "something went wrong"
+catch err do
+  print err
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'something went wrong');
+});
+
+test('try/catch: no error thrown', () => {
+  const r = run(`try do
+  print "inside try"
+catch err do
+  print "should not reach"
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'inside try');
+  assertNotIncludes(r.output, 'should not reach');
+});
+
+test('try/catch: catch runtime error', () => {
+  const r = run(`try do
+  panic("something bad happened")
+catch err do
+  print "caught"
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'caught');
+});
+
+test('try/catch: throw propagates through function', () => {
+  const r = run(`function risky with x as integer returns integer
+  when x equals 0 do
+    throw "division by zero"
+  end
+  return 100 / x
+end
+try do
+  create variable result with value risky with 0
+catch err do
+  print err
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'division by zero');
+});
+
+test('throw: simple throw', () => {
+  const r = run(`try do
+  throw 42
+catch err do
+  print err
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '42');
+});
+
+// ============================================================
+// PIPELINE OPERATOR TESTS
+// ============================================================
+
+console.log('\n\x1b[1m\x1b[36mPipeline Operator Tests\x1b[0m');
+
+test('pipeline: basic |> with builtin', () => {
+  const r = run(`create variable result with value 5 |> abs |> sqrt
+print result`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '2.236');
+});
+
+test('pipeline: multi-stage pipeline', () => {
+  const r = run(`create variable nums as list with value [3, 1, 4, 1, 5, 9]
+create variable result with value nums |> sort |> reverse
+print result`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '9, 5, 4, 3, 1, 1');
+});
+
+test('pipeline: with range and length', () => {
+  const r = run(`create variable result with value range(1, 10) |> length
+print result`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '9');
+});
+
+test('pipeline: string pipeline', () => {
+  const r = run(`create variable result with value "  hello world  " |> trim |> upper
+print result`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'HELLO WORLD');
+});
+
+// ============================================================
+// NEW MATH BUILTINS TESTS
+// ============================================================
+
+console.log('\n\x1b[1m\x1b[36mNew Math Builtins Tests\x1b[0m');
+
+test('builtin: pow', () => {
+  const r = run('create variable result with value pow(2, 10)\nprint result');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '1024');
+});
+
+test('builtin: pi', () => {
+  const r = run('print pi()');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '3.14');
+});
+
+test('builtin: min/max', () => {
+  const r = run('print min(3, 7)\nprint max(3, 7)');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '3');
+  assertIncludes(r.output, '7');
+});
+
+test('builtin: sqrt', () => {
+  const r = run('create variable result with value sqrt(144)\nprint result');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '12');
+});
+
+// ============================================================
+// NEW STRING BUILTINS TESTS
+// ============================================================
+
+console.log('\n\x1b[1m\x1b[36mNew String Builtins Tests\x1b[0m');
+
+test('builtin: reverse_str', () => {
+  const r = run('print reverse_str("hello")');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'olleh');
+});
+
+test('builtin: starts_with/ends_with', () => {
+  const r = run('print starts_with("hello", "hel")\nprint ends_with("hello", "llo")\nprint starts_with("hello", "xyz")');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('builtin: repeat_str', () => {
+  const r = run('print repeat_str("ab", 3)');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'ababab');
+});
+
+test('builtin: lines', () => {
+  const r = run('create variable result as list with value lines("a\\nb\\nc")\nprint length(result)');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '3');
+});
+
+// ============================================================
+// NEW LIST BUILTINS TESTS
+// ============================================================
+
+console.log('\n\x1b[1m\x1b[36mNew List Builtins Tests\x1b[0m');
+
+test('builtin: first/last', () => {
+  const r = run('print first([10, 20, 30])\nprint last([10, 20, 30])');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '10');
+  assertIncludes(r.output, '30');
+});
+
+test('builtin: reduce', () => {
+  const r = run(`function add with acc as integer and item as integer returns integer
+  return acc + item
+end
+create variable result with value reduce([1, 2, 3, 4, 5], "add", 0)
+print result`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '15');
+});
+
+test('builtin: any/all', () => {
+  const r = run(`function is_big with x as integer returns integer
+  when x is greater than 2 do
+    return 1
+  end
+  return 0
+end
+create variable a with value any([-1, -2, 3], "is_big")
+create variable b with value all([1, 2, 3], "is_big")
+create variable c with value all([1, -2, 3], "is_big")
+print a
+print b
+print c`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('builtin: chunk', () => {
+  const r = run('create variable result as list with value chunk([1, 2, 3, 4, 5], 2)\nprint length(result)');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '3');
+});
+
+// ============================================================
+// SYSTEM BUILTINS TESTS
+// ============================================================
+
+console.log('\n\x1b[1m\x1b[36mSystem Builtins Tests\x1b[0m');
+
+test('builtin: clock', () => {
+  const r = run('create variable t with value clock()\nprint type_of(t)');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'integer');
+});
+
+test('builtin: env_get', () => {
+  const r = run('create variable home with value env_get("HOME")\nprint type_of(home)');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'text');
+});
+
+test('builtin: args', () => {
+  const r = run('create variable a as list with value args()\nprint type_of(a)');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'list');
+});
+
+test('builtin: system echo', () => {
+  const r = run('create variable code with value system("echo hello from iozen")');
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'hello from iozen');
+});
+
+// ============================================================
 // SUMMARY
 // ============================================================
 

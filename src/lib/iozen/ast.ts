@@ -37,7 +37,12 @@ export type ASTNode =
   | OrDefaultNode
   | HasValueNode
   | ValueInsideNode
-  | LambdaNode;
+  | LambdaNode
+  | MatchNode
+  | MatchCaseNode
+  | TryCatchNode
+  | ThrowNode
+  | PipelineExprNode;
 
 // ---- Program ----
 export interface ProgramNode {
@@ -268,6 +273,40 @@ export interface HasValueNode {
 export interface ValueInsideNode {
   kind: 'ValueInside';
   expression: ASTNode;
+}
+
+// ---- Match Expression ----
+export interface MatchCaseNode {
+  kind: 'MatchCase';
+  pattern: ASTNode;
+  binding: string | null;
+  body: ASTNode[];
+}
+
+export interface MatchNode {
+  kind: 'Match';
+  subject: ASTNode;
+  cases: MatchCaseNode[];
+  otherwise: ASTNode[] | null;
+}
+
+// ---- Try/Catch ----
+export interface TryCatchNode {
+  kind: 'TryCatch';
+  tryBody: ASTNode[];
+  catchBinding: string | null;
+  catchBody: ASTNode[];
+}
+
+export interface ThrowNode {
+  kind: 'Throw';
+  value: ASTNode | null;
+}
+
+// ---- Pipeline Expression ----
+export interface PipelineExprNode {
+  kind: 'PipelineExpr';
+  stages: ASTNode[];
 }
 
 // ---- Lambda (Anonymous Function) ----

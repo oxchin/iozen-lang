@@ -14,7 +14,8 @@ import type {
   UnaryExprNode, AttachExprNode, IdentifierNode, LiteralNode,
   FunctionCallExprNode, MemberAccessNode, ListLiteralNode,
   ForceUnwrapNode, OrDefaultNode, HasValueNode, ValueInsideNode,
-  LambdaNode,
+  LambdaNode, MatchNode, MatchCaseNode, TryCatchNode, ThrowNode,
+  PipelineExprNode,
 } from './ast';
 
 export class ParseError extends Error {
@@ -91,6 +92,12 @@ export class Parser {
         return this.parseLabel();
       case TokenType.Exit:
         return this.parseExit();
+      case TokenType.Match:
+        return this.parseMatch();
+      case TokenType.Try:
+        return this.parseTryCatch();
+      case TokenType.Throw:
+        return this.parseThrow();
       case TokenType.Increase:
         return this.parseIncrease();
       case TokenType.Decrease:
@@ -546,6 +553,121 @@ export class Parser {
     return { kind: 'Exit', target } as ExitNode;
   }
 
+  private parseMatch(): ASTNode {
+    this.consume(TokenType.Match, 'Expected "match"');
+    const subject = this.parseExpression();
+
+    const cases: MatchCaseNode[] = [];
+    let otherwise: ASTNode[] | null = null;
+
+    while (this.check(TokenType.Case) || this.check(TokenType.Otherwise)) {
+      if (this.check(TokenType.Case)) {
+        this.advance(); // consume 'case'
+
+        // Parse pattern: literal, identifier (catch-all), or _ (wildcard)
+        let pattern: ASTNode;
+        let binding: string | null = null;
+
+        const tok = this.peek();
+        if (tok.type === TokenType.Identifier && tok.value === '_') {
+          this.advance();
+          pattern = { kind: 'Literal', type: 'null', value: null } as LiteralNode;
+        } else if (this.isLiteralToken(tok)) {
+          pattern = this.parsePrimary();
+        } else {
+          // Catch-all binding: case x do ...
+          binding = tok.value;
+          pattern = { kind: 'Identifier', name: tok.value } as IdentifierNode;
+          this.advance();
+        }
+
+        this.consume(TokenType.Do, 'Expected "do" after match case');
+        const body: ASTNode[] = [];
+        while (!this.check(TokenType.End) && !this.check(TokenType.Case) && !this.check(TokenType.Otherwise) && !this.isAtEnd()) {
+          const stmt = this.parseStatement();
+          if (stmt) body.push(stmt);
+        }
+        this.consume(TokenType.End, 'Expected "end" to close match case');
+
+        cases.push({ kind: 'MatchCase', pattern, binding, body } as MatchCaseNode);
+      } else if (this.check(TokenType.Otherwise)) {
+        this.advance(); // consume 'otherwise'
+        this.consume(TokenType.Do, 'Expected "do" after otherwise');
+        otherwise = [];
+        while (!this.check(TokenType.End) && !this.isAtEnd()) {
+          const stmt = this.parseStatement();
+          if (stmt) otherwise.push(stmt);
+        }
+        this.consume(TokenType.End, 'Expected "end" to close otherwise');
+      }
+    }
+
+    // consume final 'end' for the match block
+    if (this.check(TokenType.End)) {
+      this.advance();
+    }
+
+    return { kind: 'Match', subject, cases, otherwise } as MatchNode;
+  }
+
+  private parseTryCatch(): ASTNode {
+    this.consume(TokenType.Try, 'Expected "try"');
+    this.consume(TokenType.Do, 'Expected "do" after try');
+
+    const tryBody: ASTNode[] = [];
+    while (!this.check(TokenType.End) && !this.check(TokenType.Catch) && !this.isAtEnd()) {
+      const stmt = this.parseStatement();
+      if (stmt) tryBody.push(stmt);
+    }
+    // consume optional "end" before "catch" (both styles supported)
+    if (this.check(TokenType.End)) {
+      this.advance();
+    }
+
+    this.consume(TokenType.Catch, 'Expected "catch"');
+    let catchBinding: string | null = null;
+    if (this.peek().type === TokenType.Identifier) {
+      catchBinding = this.advance().value;
+    }
+    this.consume(TokenType.Do, 'Expected "do" after catch');
+
+    const catchBody: ASTNode[] = [];
+    while (!this.check(TokenType.End) && !this.isAtEnd()) {
+      const stmt = this.parseStatement();
+      if (stmt) catchBody.push(stmt);
+    }
+    this.consume(TokenType.End, 'Expected "end" to close catch block');
+
+    return { kind: 'TryCatch', tryBody, catchBinding, catchBody } as TryCatchNode;
+  }
+
+  private parseThrow(): ASTNode {
+    this.consume(TokenType.Throw, 'Expected "throw"');
+    let value: ASTNode | null = null;
+    // Parse the thrown value if it's an expression (not a statement keyword)
+    if (!this.isAtEnd() && !this.check(TokenType.End) && !this.check(TokenType.Newline)) {
+      const tok = this.peek();
+      // Only parse if it looks like an expression, not a statement keyword
+      if (tok.type === TokenType.Identifier || tok.type === TokenType.IntegerLiteral ||
+          tok.type === TokenType.FloatLiteral || tok.type === TokenType.StringLiteral ||
+          tok.type === TokenType.BooleanLiteral || tok.type === TokenType.NothingLiteral ||
+          tok.type === TokenType.Minus || tok.type === TokenType.Not ||
+          tok.type === TokenType.LeftParen || tok.type === TokenType.LeftBracket) {
+        value = this.parseExpression();
+      }
+    }
+    return { kind: 'Throw', value } as ThrowNode;
+  }
+
+  private isLiteralToken(tok: Token): boolean {
+    return tok.type === TokenType.IntegerLiteral ||
+           tok.type === TokenType.FloatLiteral ||
+           tok.type === TokenType.StringLiteral ||
+           tok.type === TokenType.CharLiteral ||
+           tok.type === TokenType.BooleanLiteral ||
+           tok.type === TokenType.NothingLiteral;
+  }
+
   private parseIncrease(): ASTNode {
     this.consume(TokenType.Increase, 'Expected "increase"');
     const target = this.parseExpression();
@@ -656,7 +778,24 @@ export class Parser {
   // ---- Expression Parsing (Precedence Climbing) ----
 
   private parseExpression(): ASTNode {
-    return this.parseAttach();
+    return this.parsePipeline();
+  }
+
+  // Pipeline: a |> f(b) |> g(c) → g(f(a, b), c)
+  private parsePipeline(): ASTNode {
+    let left = this.parseAttach();
+
+    if (this.check(TokenType.Pipe)) {
+      const stages: ASTNode[] = [left];
+      while (this.check(TokenType.Pipe)) {
+        this.advance();
+        const stage = this.parseAttach();
+        stages.push(stage);
+      }
+      return { kind: 'PipelineExpr', stages } as PipelineExprNode;
+    }
+
+    return left;
   }
 
   private parseAttach(): ASTNode {
@@ -897,6 +1036,11 @@ export class Parser {
 
   private parsePrimary(): ASTNode {
     const token = this.peek();
+
+    // Match expression (can be used as expression in certain contexts)
+    if (token.type === TokenType.Match) {
+      return this.parseMatch();
+    }
 
     // Integer literal
     if (token.type === TokenType.IntegerLiteral) {
@@ -1147,7 +1291,13 @@ export class Parser {
 
   private consumeName(message: string): Token {
     const t = this.peek();
-    if (t.type === TokenType.Identifier || this.isTypeKeyword() || this.isLogicalKeyword()) {
+    if (t.type === TokenType.Identifier || this.isTypeKeyword() || this.isLogicalKeyword() ||
+        t.type === TokenType.Label || t.type === TokenType.Case ||
+        t.type === TokenType.Match || t.type === TokenType.Catch ||
+        t.type === TokenType.Throw || t.type === TokenType.Exit ||
+        t.type === TokenType.Module || t.type === TokenType.Expose ||
+        t.type === TokenType.Start || t.type === TokenType.Wait ||
+        t.type === TokenType.Send || t.type === TokenType.Receive) {
       return this.advance();
     }
     throw new ParseError(message, t);

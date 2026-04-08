@@ -15,11 +15,16 @@ import type {
   BinaryExprNode, UnaryExprNode, AttachExprNode, IdentifierNode,
   LiteralNode, FunctionCallExprNode, MemberAccessNode,
   IndexAccessNode, ListLiteralNode, HasValueNode, ValueInsideNode,
-  LambdaNode, ExitNode,
+  LambdaNode, ExitNode, MatchNode, MatchCaseNode, TryCatchNode, ThrowNode,
+  PipelineExprNode,
 } from './ast';
 
 // Special signal to unwind the call stack for return/exit
 class ReturnSignal {
+  constructor(public value: IOZENValue) {}
+}
+
+class ThrowSignal {
   constructor(public value: IOZENValue) {}
 }
 
@@ -129,6 +134,15 @@ export class Interpreter {
         break;
       case 'Exit':
         this.execExit(node as ExitNode);
+        break;
+      case 'Match':
+        this.execMatch(node as MatchNode, env);
+        break;
+      case 'TryCatch':
+        this.execTryCatch(node as TryCatchNode, env);
+        break;
+      case 'Throw':
+        this.execThrow(node as ThrowNode, env);
         break;
       case 'Increase':
         this.execIncrease(node as IncreaseNode, env);
@@ -417,6 +431,128 @@ export class Interpreter {
     throw new ExitSignal(node.target);
   }
 
+  private execThrow(node: ThrowNode, env: Environment): void {
+    const val = node.value ? this.evaluate(node.value, env) : null;
+    throw new ThrowSignal(val);
+  }
+
+  private execMatch(node: MatchNode, env: Environment): void {
+    this.evalMatch(node, env);
+  }
+
+  private evalMatch(node: MatchNode, env: Environment): IOZENValue {
+    const subject = this.evaluate(node.subject, env);
+
+    for (const matchCase of node.cases) {
+      const pattern = matchCase.pattern;
+
+      if (matchCase.binding) {
+        // Catch-all binding: always matches, bind the value
+        const childEnv = env.child();
+        childEnv.define(matchCase.binding, subject);
+        return this.executeBlockAndReturn(matchCase.body, childEnv);
+      } else if (pattern.kind === 'Literal' && pattern.type === 'null') {
+        // Wildcard pattern (_): always matches, no binding
+        return this.executeBlockAndReturn(matchCase.body, env);
+      } else if (pattern.kind === 'Literal') {
+        // Literal pattern matching
+        const patternVal = this.evaluate(pattern, env);
+        if (this.iozenValuesEqual(subject, patternVal)) {
+          return this.executeBlockAndReturn(matchCase.body, env);
+        }
+      }
+    }
+
+    if (node.otherwise) {
+      return this.executeBlockAndReturn(node.otherwise, env);
+    }
+
+    return null;
+  }
+
+  private executeBlockAndReturn(statements: ASTNode[], env: Environment): IOZENValue {
+    for (const stmt of statements) {
+      this.execute(stmt, env);
+    }
+    // Return the last computed result
+    try {
+      return this.env.get('__last_result__');
+    } catch {
+      return null;
+    }
+  }
+
+  private execTryCatch(node: TryCatchNode, env: Environment): void {
+    try {
+      this.executeBlock(node.tryBody, env);
+    } catch (e) {
+      if (e instanceof ThrowSignal) {
+        const childEnv = env.child();
+        if (node.catchBinding) {
+          childEnv.define(node.catchBinding, e.value);
+        }
+        this.executeBlock(node.catchBody, childEnv);
+      } else if (e instanceof ReturnSignal) {
+        throw e; // re-throw return signals
+      } else if (e instanceof ExitSignal) {
+        throw e; // re-throw exit signals
+      } else if (e instanceof RuntimeError) {
+        // Catch runtime errors too
+        const childEnv = env.child();
+        if (node.catchBinding) {
+          childEnv.define(node.catchBinding, e.message);
+        }
+        this.executeBlock(node.catchBody, childEnv);
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  private evalPipeline(node: PipelineExprNode, env: Environment): IOZENValue {
+    let value = this.evaluate(node.stages[0], env);
+
+    for (let i = 1; i < node.stages.length; i++) {
+      const stage = node.stages[i];
+      if (stage.kind === 'FunctionCallExpr') {
+        const funcCall = stage as FunctionCallExprNode;
+        // Wrap value as literal node and prepend as first argument
+        const valueNode = this.wrapAsLiteral(value);
+        const newArgs = [valueNode, ...funcCall.arguments];
+        value = this.callFunction(funcCall.name, newArgs, env);
+      } else if (stage.kind === 'Identifier') {
+        // Bare function name in pipeline: value |> func_name
+        const funcName = (stage as IdentifierNode).name;
+        const valueNode = this.wrapAsLiteral(value);
+        value = this.callFunction(funcName, [valueNode], env);
+      } else {
+        value = this.evaluate(stage, env);
+      }
+    }
+
+    this.env.define('__last_result__', value);
+    return value;
+  }
+
+  private wrapAsLiteral(value: IOZENValue): ASTNode {
+    if (value === null) return { kind: 'Literal', type: 'null', value: null } as LiteralNode;
+    if (typeof value === 'number') {
+      return { kind: 'Literal', type: Number.isInteger(value) ? 'integer' : 'float', value } as LiteralNode;
+    }
+    if (typeof value === 'string') return { kind: 'Literal', type: 'text', value } as LiteralNode;
+    if (typeof value === 'boolean') return { kind: 'Literal', type: 'boolean', value } as LiteralNode;
+    return { kind: 'Literal', type: 'null', value } as LiteralNode;
+  }
+
+  private iozenValuesEqual(a: IOZENValue, b: IOZENValue): boolean {
+    if (a === b) return true;
+    if (a === null || b === null) return a === b;
+    if (typeof a === 'number' && typeof b === 'number') return a === b;
+    if (typeof a === 'string' && typeof b === 'string') return a === b;
+    if (typeof a === 'boolean' && typeof b === 'boolean') return a === b;
+    return false;
+  }
+
   private execReturn(node: ReturnStmtNode, env: Environment): void {
     const value = node.value ? this.evaluate(node.value, env) : null;
     throw new ReturnSignal(value);
@@ -660,6 +796,20 @@ export class Interpreter {
           closure: env,
         };
         return func;
+      }
+
+      case 'PipelineExpr': {
+        return this.evalPipeline(node as PipelineExprNode, env);
+      }
+
+      case 'Match': {
+        return this.evalMatch(node as MatchNode, env);
+      }
+
+      case 'Throw': {
+        const t = node as ThrowNode;
+        const val = t.value ? this.evaluate(t.value, env) : null;
+        throw new ThrowSignal(val);
       }
 
       default:
@@ -1465,6 +1615,269 @@ export class Interpreter {
       const val = args[0];
       this.output.push(this.iozenValueToString(val));
       this.env.define('__last_result__', val);
+      return true;
+    }
+
+    // ---- New builtins: Math ----
+    if (n === 'abs' && args.length >= 1) {
+      this.env.define('__last_result__', Math.abs(this.toNumber(args[0])));
+      return true;
+    }
+    if (n === 'pow' && args.length >= 2) {
+      this.env.define('__last_result__', Math.pow(this.toNumber(args[0]), this.toNumber(args[1])));
+      return true;
+    }
+    if (n === 'sqrt' && args.length >= 1) {
+      this.env.define('__last_result__', Math.sqrt(this.toNumber(args[0])));
+      return true;
+    }
+    if (n === 'floor' && args.length >= 1) {
+      this.env.define('__last_result__', Math.floor(this.toNumber(args[0])));
+      return true;
+    }
+    if (n === 'ceil' && args.length >= 1) {
+      this.env.define('__last_result__', Math.ceil(this.toNumber(args[0])));
+      return true;
+    }
+    if (n === 'round' && args.length >= 1) {
+      this.env.define('__last_result__', Math.round(this.toNumber(args[0])));
+      return true;
+    }
+    if (n === 'min' && args.length >= 2) {
+      this.env.define('__last_result__', Math.min(this.toNumber(args[0]), this.toNumber(args[1])));
+      return true;
+    }
+    if (n === 'max' && args.length >= 2) {
+      this.env.define('__last_result__', Math.max(this.toNumber(args[0]), this.toNumber(args[1])));
+      return true;
+    }
+    if (n === 'log' && args.length >= 1) {
+      this.env.define('__last_result__', Math.log(this.toNumber(args[0])));
+      return true;
+    }
+    if (n === 'log10' && args.length >= 1) {
+      this.env.define('__last_result__', Math.log10(this.toNumber(args[0])));
+      return true;
+    }
+    if (n === 'sin' && args.length >= 1) {
+      this.env.define('__last_result__', Math.sin(this.toNumber(args[0])));
+      return true;
+    }
+    if (n === 'cos' && args.length >= 1) {
+      this.env.define('__last_result__', Math.cos(this.toNumber(args[0])));
+      return true;
+    }
+    if (n === 'tan' && args.length >= 1) {
+      this.env.define('__last_result__', Math.tan(this.toNumber(args[0])));
+      return true;
+    }
+    if (n === 'pi') {
+      this.env.define('__last_result__', Math.PI);
+      return true;
+    }
+
+    // ---- New builtins: String ----
+    if (n === 'upper' && args.length >= 1) {
+      this.env.define('__last_result__', String(args[0]).toUpperCase());
+      return true;
+    }
+    if (n === 'starts_with' && args.length >= 2) {
+      this.env.define('__last_result__', String(args[0]).startsWith(String(args[1])));
+      return true;
+    }
+    if (n === 'ends_with' && args.length >= 2) {
+      this.env.define('__last_result__', String(args[0]).endsWith(String(args[1])));
+      return true;
+    }
+    if (n === 'repeat_str' && args.length >= 2) {
+      this.env.define('__last_result__', String(args[0]).repeat(Math.floor(this.toNumber(args[1]))));
+      return true;
+    }
+    if (n === 'pad_left' && args.length >= 3) {
+      const s = String(args[0]);
+      const len = Math.floor(this.toNumber(args[1]));
+      const ch = String(args[2]).charAt(0) || ' ';
+      this.env.define('__last_result__', s.padStart(len, ch));
+      return true;
+    }
+    if (n === 'pad_right' && args.length >= 3) {
+      const s = String(args[0]);
+      const len = Math.floor(this.toNumber(args[1]));
+      const ch = String(args[2]).charAt(0) || ' ';
+      this.env.define('__last_result__', s.padEnd(len, ch));
+      return true;
+    }
+    if (n === 'strip' && args.length >= 1) {
+      this.env.define('__last_result__', String(args[0]).trim());
+      return true;
+    }
+    if (n === 'lines' && args.length >= 1) {
+      this.env.define('__last_result__', String(args[0]).split('\n'));
+      return true;
+    }
+    if (n === 'format_num' && args.length >= 1) {
+      this.env.define('__last_result__', String(args[0]));
+      return true;
+    }
+    if (n === 'reverse_str' && args.length >= 1) {
+      this.env.define('__last_result__', String(args[0]).split('').reverse().join(''));
+      return true;
+    }
+
+    // ---- New builtins: List ----
+    if (n === 'flat_map' && args.length >= 2 && Array.isArray(args[0])) {
+      const arr = args[0] as IOZENValue[];
+      const funcName = String(args[1]);
+      const result: IOZENValue[] = [];
+      const func = env.get(funcName) as IOZENFunction;
+      if (func && func.__iozen_type === 'function') {
+        for (const item of arr) {
+          const funcEnv = func.closure.child();
+          funcEnv.define(func.parameters[0]?.name || 'arg', item);
+          try {
+            this.executeBlock(func.body, funcEnv);
+          } catch (e) {
+            if (e instanceof ReturnSignal) {
+              const val = e.value;
+              if (Array.isArray(val)) result.push(...val);
+              else result.push(val);
+            } else throw e;
+          }
+        }
+      }
+      this.env.define('__last_result__', result);
+      return true;
+    }
+    if (n === 'any' && args.length >= 2 && Array.isArray(args[0])) {
+      const arr = args[0] as IOZENValue[];
+      const funcName = String(args[1]);
+      const func = env.get(funcName) as IOZENFunction;
+      if (func && func.__iozen_type === 'function') {
+        for (const item of arr) {
+          const funcEnv = func.closure.child();
+          funcEnv.define(func.parameters[0]?.name || 'arg', item);
+          try {
+            this.executeBlock(func.body, funcEnv);
+          } catch (e) {
+            if (e instanceof ReturnSignal) {
+              if (this.isTruthy(e.value)) {
+                this.env.define('__last_result__', true);
+                return true;
+              }
+            } else throw e;
+          }
+        }
+      }
+      this.env.define('__last_result__', false);
+      return true;
+    }
+    if (n === 'all' && args.length >= 2 && Array.isArray(args[0])) {
+      const arr = args[0] as IOZENValue[];
+      const funcName = String(args[1]);
+      const func = env.get(funcName) as IOZENFunction;
+      if (func && func.__iozen_type === 'function') {
+        for (const item of arr) {
+          const funcEnv = func.closure.child();
+          funcEnv.define(func.parameters[0]?.name || 'arg', item);
+          try {
+            this.executeBlock(func.body, funcEnv);
+          } catch (e) {
+            if (e instanceof ReturnSignal) {
+              if (!this.isTruthy(e.value)) {
+                this.env.define('__last_result__', false);
+                return true;
+              }
+            } else throw e;
+          }
+        }
+      }
+      this.env.define('__last_result__', true);
+      return true;
+    }
+    if (n === 'reduce' && args.length >= 3 && Array.isArray(args[0])) {
+      const arr = args[0] as IOZENValue[];
+      const funcName = String(args[1]);
+      let acc = args[2];
+      const func = env.get(funcName) as IOZENFunction;
+      if (func && func.__iozen_type === 'function') {
+        for (const item of arr) {
+          const funcEnv = func.closure.child();
+          funcEnv.define(func.parameters[0]?.name || 'acc', acc);
+          funcEnv.define(func.parameters[1]?.name || 'item', item);
+          try {
+            this.executeBlock(func.body, funcEnv);
+          } catch (e) {
+            if (e instanceof ReturnSignal) acc = e.value;
+            else throw e;
+          }
+        }
+      }
+      this.env.define('__last_result__', acc);
+      return true;
+    }
+    if (n === 'first' && args.length >= 1 && Array.isArray(args[0])) {
+      const arr = args[0] as IOZENValue[];
+      this.env.define('__last_result__', arr.length > 0 ? arr[0] : null);
+      return true;
+    }
+    if (n === 'last' && args.length >= 1 && Array.isArray(args[0])) {
+      const arr = args[0] as IOZENValue[];
+      this.env.define('__last_result__', arr.length > 0 ? arr[arr.length - 1] : null);
+      return true;
+    }
+    if (n === 'chunk' && args.length >= 2 && Array.isArray(args[0])) {
+      const arr = args[0] as IOZENValue[];
+      const size = Math.floor(this.toNumber(args[1]));
+      const result: IOZENValue[] = [];
+      for (let i = 0; i < arr.length; i += size) {
+        result.push(arr.slice(i, i + size));
+      }
+      this.env.define('__last_result__', result);
+      return true;
+    }
+
+    // ---- New builtins: System ----
+    if (n === 'clock') {
+      this.env.define('__last_result__', Date.now());
+      return true;
+    }
+    if (n === 'current_time') {
+      this.env.define('__last_result__', Date.now());
+      return true;
+    }
+    if (n === 'time_format' && args.length >= 1) {
+      this.env.define('__last_result__', new Date(this.toNumber(args[0])).toISOString());
+      return true;
+    }
+    if (n === 'env_get' && args.length >= 1) {
+      this.env.define('__last_result__', process.env[String(args[0])] || null);
+      return true;
+    }
+    if (n === 'env_set' && args.length >= 2) {
+      process.env[String(args[0])] = String(args[1]);
+      this.env.define('__last_result__', true);
+      return true;
+    }
+    if (n === 'args' || n === 'arguments') {
+      this.env.define('__last_result__', process.argv.slice(2));
+      return true;
+    }
+    if (n === 'system' && args.length >= 1) {
+      const { execSync } = require('node:child_process');
+      try {
+        const result = execSync(String(args[0]), { encoding: 'utf-8', timeout: 30000 });
+        this.output.push(result.trimEnd());
+        this.env.define('__last_result__', 0);
+      } catch (e: any) {
+        this.env.define('__last_result__', e.status ?? 1);
+      }
+      return true;
+    }
+    if (n === 'sleep' && args.length >= 1) {
+      const ms = Math.floor(this.toNumber(args[0]));
+      const { execSync } = require('node:child_process');
+      execSync(`sleep ${ms / 1000}`, { timeout: ms + 1000 });
+      this.env.define('__last_result__', true);
       return true;
     }
 

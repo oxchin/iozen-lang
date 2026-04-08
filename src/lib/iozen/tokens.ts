@@ -45,8 +45,8 @@ export enum TokenType {
   Import = 'Import',
   Module = 'Module',
   Expose = 'Expose',
-
   // --- Control flow ---
+  Match = 'Match',
   When = 'When',
   Otherwise = 'Otherwise',
   Do = 'Do',
@@ -60,6 +60,9 @@ export enum TokenType {
   In = 'In',
   Label = 'Label',
   Exit = 'Exit',
+  Try = 'Try',
+  Catch = 'Catch',
+  Throw = 'Throw',
 
   // --- Operators ---
   Plus = 'Plus',
@@ -136,6 +139,7 @@ export enum TokenType {
   Colon = 'Colon',
   Semicolon = 'Semicolon',
   Arrow = 'Arrow',
+  Pipe = 'Pipe',
   Hash = 'Hash',
 
   // Special
@@ -185,6 +189,7 @@ export const KEYWORDS: Record<string, TokenType> = {
   'expose': TokenType.Expose,
 
   // Control flow
+  'match': TokenType.Match,
   'when': TokenType.When,
   'otherwise': TokenType.Otherwise,
   'do': TokenType.Do,
@@ -198,6 +203,9 @@ export const KEYWORDS: Record<string, TokenType> = {
   'in': TokenType.In,
   'label': TokenType.Label,
   'exit': TokenType.Exit,
+  'try': TokenType.Try,
+  'catch': TokenType.Catch,
+  'throw': TokenType.Throw,
 
   // Type qualifiers
   'as': TokenType.As,
@@ -279,6 +287,7 @@ export const SYMBOLS: Record<string, TokenType> = {
   ':': TokenType.Colon,
   ';': TokenType.Semicolon,
   '->': TokenType.Arrow,
+  '|>': TokenType.Pipe,
   '#': TokenType.Hash,
 };
 
