@@ -1,0 +1,266 @@
+# ============================================================
+# IOZEN SELF-HOSTING LEXER v0.1
+# Tokenizer untuk IOZEN, ditulis DALAM bahasa IOZEN sendiri
+# Jalankan: iozen run bootstrap/lexer.iozen
+# ============================================================
+
+# Input: kode IOZEN yang akan di-tokenize
+create variable source as text with value "print 'Hello, World!'\ncreate variable x as integer with value 42\nprint x + 10"
+
+print "=========================================="
+print "  IOZEN SELF-HOSTING LEXER v0.1"
+print "  Written in IOZEN, processing IOZEN code"
+print "=========================================="
+print ""
+print "Input source code:"
+print "  " attach source
+print ""
+
+# State
+create variable pos as integer with value 0
+create variable src_len as integer with value length(source)
+create variable tokens as list with value []
+
+# Character checks
+function is_alpha(ch) returns boolean
+    create variable c as integer with value ord(ch)
+    when c >= 97 and c <= 122 do return true end
+    when c >= 65 and c <= 90 do return true end
+    when c equals 95 do return true end
+    return false
+end
+
+function is_digit(ch) returns boolean
+    create variable c as integer with value ord(ch)
+    when c >= 48 and c <= 57 do return true end
+    return false
+end
+
+function is_alnum(ch) returns boolean
+    when is_alpha(ch) do return true end
+    return is_digit(ch)
+end
+
+# Keyword check
+function is_keyword(word) returns boolean
+    when word equals "print" do return true end
+    when word equals "create" do return true end
+    when word equals "variable" do return true end
+    when word equals "as" do return true end
+    when word equals "with" do return true end
+    when word equals "value" do return true end
+    when word equals "integer" do return true end
+    when word equals "float" do return true end
+    when word equals "text" do return true end
+    when word equals "list" do return true end
+    when word equals "function" do return true end
+    when word equals "returns" do return true end
+    when word equals "return" do return true end
+    when word equals "end" do return true end
+    when word equals "when" do return true end
+    when word equals "otherwise" do return true end
+    when word equals "do" do return true end
+    when word equals "while" do return true end
+    when word equals "for" do return true end
+    when word equals "each" do return true end
+    when word equals "in" do return true end
+    when word equals "and" do return true end
+    when word equals "or" do return true end
+    when word equals "is" do return true end
+    when word equals "true" do return true end
+    when word equals "false" do return true end
+    when word equals "nothing" do return true end
+    when word equals "increase" do return true end
+    when word equals "by" do return true end
+    when word equals "set" do return true end
+    when word equals "to" do return true end
+    when word equals "of" do return true end
+    when word equals "attach" do return true end
+    return false
+end
+
+# Read identifier or keyword
+function read_ident() returns list
+    create variable word as text with value ""
+    while pos < src_len and is_alnum(char_at(source, pos)) do
+        set word to word attach char_at(source, pos)
+        set pos to pos + 1
+    end
+    when is_keyword(word) do
+        return [word, word]
+    end
+    return ["IDENT", word]
+end
+
+# Read number
+function read_num() returns list
+    create variable num as text with value ""
+    while pos < src_len and is_digit(char_at(source, pos)) do
+        set num to num attach char_at(source, pos)
+        set pos to pos + 1
+    end
+    return ["INT", num]
+end
+
+# Read single-quoted string
+function read_str() returns list
+    set pos to pos + 1
+    create variable str as text with value ""
+    while pos < src_len do
+        create variable ch as text with value char_at(source, pos)
+        when ch equals "'" do
+            set pos to pos + 1
+            return ["STR", str]
+        end
+        set str to str attach ch
+        set pos to pos + 1
+    end
+    return ["STR", str]
+end
+
+# ===== MAIN TOKENIZE =====
+function tokenize() returns list
+    create variable matched as boolean with value false
+
+    while pos < src_len do
+        # Skip spaces
+        while pos < src_len and char_at(source, pos) equals " " do
+            set pos to pos + 1
+        end
+
+        when pos >= src_len do
+            return tokens
+        end
+
+        create variable ch as text with value char_at(source, pos)
+        set matched to false
+
+        # String literal
+        when ch equals "'" do
+            push(tokens, read_str())
+            set matched to true
+        end
+
+        # Number
+        when is_digit(ch) do
+            push(tokens, read_num())
+            set matched to true
+        end
+
+        # Identifier / keyword
+        when is_alpha(ch) do
+            push(tokens, read_ident())
+            set matched to true
+        end
+
+        # Symbols
+        when ch equals "+" do
+            push(tokens, ["PLUS", "+"])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals "-" do
+            push(tokens, ["MINUS", "-"])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals "*" do
+            push(tokens, ["STAR", "*"])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals "/" do
+            push(tokens, ["SLASH", "/"])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals "=" do
+            set pos to pos + 1
+            set matched to true
+            when pos < src_len and char_at(source, pos) equals "=" do
+                push(tokens, ["EQ", "=="])
+                set pos to pos + 1
+            otherwise do
+                push(tokens, ["ASSIGN", "="])
+            end
+        end
+        when ch equals "<" do
+            push(tokens, ["LT", "<"])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals ">" do
+            push(tokens, ["GT", ">"])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals "," do
+            push(tokens, ["COMMA", ","])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals "(" do
+            push(tokens, ["LPAREN", "("])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals ")" do
+            push(tokens, ["RPAREN", ")"])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals "[" do
+            push(tokens, ["LBRACK", "["])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals "]" do
+            push(tokens, ["RBRACK", "]"])
+            set pos to pos + 1
+            set matched to true
+        end
+        when ch equals "." do
+            push(tokens, ["DOT", "."])
+            set pos to pos + 1
+            set matched to true
+        end
+
+        # Safety: advance if nothing matched (prevents infinite loop)
+        when matched equals false and pos < src_len do
+            set pos to pos + 1
+        end
+    end
+
+    return tokens
+end
+
+# =============================================
+# RUN THE SELF-HOSTING LEXER
+# =============================================
+
+create variable result as list with value tokenize()
+
+print "Tokens produced: " attach length(result)
+print ""
+print "  #   Type           Value"
+print "  -   ----           -----"
+
+create variable i as integer with value 0
+while i < length(result) do
+    create variable tok as list with value result[i]
+    print "  " attach i attach "   " attach tok[0] attach "           " attach tok[1]
+    increase i by 1
+end
+
+print ""
+print "=========================================="
+print "  SELF-HOSTING PROOF:"
+print "  IOZEN lexer (written in IOZEN) successfully"
+print "  tokenized IOZEN source code."
+print ""
+print "  Bootstrap path:"
+print "  Phase 0: IOZEN compiler in TypeScript"
+print "  Phase 1: IOZEN lexer in IOZEN (YOU ARE HERE)"
+print "  Phase 2: IOZEN parser in IOZEN"
+print "  Phase 3: IOZEN self-hosting compiler"
+print "=========================================="

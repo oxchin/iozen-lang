@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Generated temp files
+.iozen-runner-*.ts
+
+# Compiled example binaries
+iozen-cli/examples/hello_iozen
+iozen-cli/examples/fibonacci
+iozen-cli/examples/prime
+iozen-cli/examples/fizzbuzz
+
+# Lock files
+bun.lock
+package-lock.json
+yarn.lock

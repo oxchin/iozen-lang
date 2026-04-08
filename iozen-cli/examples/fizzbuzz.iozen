@@ -1,0 +1,30 @@
+# fizzbuzz.iozen — The classic FizzBuzz challenge in IOZEN
+
+function fizzbuzz with n as integer returns nothing
+    create variable i as integer with value 1
+    while i is less than or equal to n do
+        create variable mod3 as integer with value i % 3
+        create variable mod5 as integer with value i % 5
+
+        when mod3 equals 0 and mod5 equals 0 do
+            print "  " attach i attach " → FizzBuzz 🔥"
+        otherwise when mod3 equals 0 do
+            print "  " attach i attach " → Fizz"
+        otherwise when mod5 equals 0 do
+            print "  " attach i attach " → Buzz"
+        otherwise do
+            print "  " attach i attach " → " attach i
+        end
+
+        increase i by 1
+    end
+end
+
+print "═══════════════════════════"
+print "   FizzBuzz in IOZEN v0.1"
+print "═══════════════════════════"
+
+fizzbuzz with 30
+
+print ""
+print "Done. IOZEN handles classics with style."

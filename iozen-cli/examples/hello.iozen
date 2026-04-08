@@ -1,0 +1,8 @@
+# hello.iozen — First IOZEN program
+print "Hello, World!"
+print "Welcome to IOZEN v0.1"
+print ""
+print "This is running from your terminal."
+print "Not from a website."
+print ""
+print "IOZEN is real. 🔥"

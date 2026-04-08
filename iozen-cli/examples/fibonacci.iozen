@@ -1,0 +1,33 @@
+# fibonacci.iozen — Compute Fibonacci numbers using iteration
+
+function fibonacci with n as integer returns integer
+    when n is less than or equal to 0 do
+        return 0
+    end
+    when n equals 1 do
+        return 1
+    end
+
+    create variable a as integer with value 0
+    create variable b as integer with value 1
+    create variable i as integer with value 2
+
+    while i is less than or equal to n do
+        create variable temp as integer with value b
+        set b to a + b
+        set a to temp
+        increase i by 1
+    end
+
+    return b
+end
+
+print "=== Fibonacci Sequence ==="
+print ""
+
+create variable i as integer with value 0
+while i is less than or equal to 25 do
+    create variable fib as integer with value fibonacci with i
+    print "fib(" attach i attach ") = " attach fib
+    increase i by 1
+end

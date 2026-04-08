@@ -1,0 +1,40 @@
+# prime.iozen — Find prime numbers using IOZEN
+
+function is_prime with n as integer returns boolean
+    when n is less than 2 do
+        return false
+    end
+    when n equals 2 do
+        return true
+    end
+    when n % 2 equals 0 do
+        return false
+    end
+
+    create variable i as integer with value 3
+    while i * i is less than or equal to n do
+        when n % i equals 0 do
+            return false
+        end
+        increase i by 2
+    end
+
+    return true
+end
+
+print "=== Prime Numbers (1-100) ==="
+print ""
+
+create variable count as integer with value 0
+create variable n as integer with value 2
+while n is less than or equal to 100 do
+    create variable prime as boolean with value is_prime with n
+    when prime equals true do
+        print "  " attach n
+        increase count by 1
+    end
+    increase n by 1
+end
+
+print ""
+print "Found " attach count attach " primes between 1 and 100."

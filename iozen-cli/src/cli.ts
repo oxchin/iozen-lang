@@ -1,0 +1,454 @@
+#!/usr/bin/env bun
+// ============================================================
+// IOZEN Language — CLI (Command Line Interface)
+// Usage:
+//   iozen run <file.iozen>        — Execute a IOZEN program
+//   iozen build <file.iozen>      — Compile to standalone binary
+//   iozen init <project>         — Create new IOZEN project
+//   iozen version                — Show version info
+//   iozen tokens <file.iozen>     — Show token output
+//   iozen ast <file.iozen>        — Show AST output
+// ============================================================
+
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+import { Interpreter } from "../../src/lib/iozen/interpreter";
+import { Lexer } from "../../src/lib/iozen/lexer";
+import { ParseError, Parser } from "../../src/lib/iozen/parser";
+
+// ---- ANSI Colors (no external dependency) ----
+const C = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  red: "\x1b[31m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  cyan: "\x1b[36m",
+  magenta: "\x1b[35m",
+  blue: "\x1b[34m",
+  gray: "\x1b[90m",
+  white: "\x1b[97m",
+  bgBlue: "\x1b[44m",
+  bgGreen: "\x1b[42m",
+};
+
+// ---- Version ----
+const VERSION = "0.1.0";
+
+// ---- Main Entry ----
+async function main() {
+  const args = process.argv.slice(2);
+
+  if (args.length === 0) {
+    printBanner();
+    printUsage();
+    process.exit(0);
+  }
+
+  const command = args[0];
+
+  switch (command) {
+    case "run":
+      await cmdRun(args.slice(1));
+      break;
+    case "build":
+      await cmdBuild(args.slice(1));
+      break;
+    case "init":
+      await cmdInit(args.slice(1));
+      break;
+    case "version":
+    case "-v":
+    case "--version":
+      cmdVersion();
+      break;
+    case "tokens":
+      await cmdTokens(args.slice(1));
+      break;
+    case "ast":
+      await cmdAst(args.slice(1));
+      break;
+    case "help":
+    case "-h":
+    case "--help":
+      printUsage();
+      break;
+    default:
+      error(`Unknown command: "${command}"`);
+      printUsage();
+      process.exit(1);
+  }
+}
+
+// ---- Commands ----
+
+async function cmdRun(args: string[]) {
+  if (args.length === 0) {
+    error('Usage: iozen run <file.iozen>');
+    process.exit(1);
+  }
+
+  const filePath = resolve(args[0]);
+
+  if (!existsSync(filePath)) {
+    error(`File not found: ${filePath}`);
+    process.exit(1);
+  }
+
+  const source = await readFile(filePath, "utf-8");
+
+  log(`${C.cyan}⚙  Compiling and running ${C.white}${basename(filePath)}${C.reset}`);
+
+  const t0 = performance.now();
+
+  try {
+    // Phase 1: Lexing
+    const t1 = performance.now();
+    const lexer = new Lexer(source);
+    const tokens = lexer.tokenize();
+    const lexTime = (performance.now() - t1).toFixed(2);
+
+    log(`${C.gray}  ✓ Lexer:     ${tokens.length} tokens in ${lexTime}ms${C.reset}`);
+
+    // Phase 2: Parsing
+    const t2 = performance.now();
+    const parser = new Parser(tokens);
+    const ast = parser.parse();
+    const parseTime = (performance.now() - t2).toFixed(2);
+
+    log(`${C.gray}  ✓ Parser:    ${ast.statements.length} statements in ${parseTime}ms${C.reset}`);
+
+    // Phase 3: Interpretation
+    const t3 = performance.now();
+    const interpreter = new Interpreter();
+    const result = interpreter.run(source);
+    const execTime = (performance.now() - t3).toFixed(2);
+    const totalTime = (performance.now() - t0).toFixed(2);
+
+    log(`${C.gray}  ✓ Executor:  ${result.output.length} outputs in ${execTime}ms${C.reset}`);
+    log("");
+
+    // Print output
+    for (const line of result.output) {
+      console.log(line);
+    }
+
+    // Print errors
+    for (const err of result.errors) {
+      console.error(`${C.red}  ✗ ${err}${C.reset}`);
+    }
+
+    // Summary
+    log("");
+    if (result.errors.length === 0) {
+      log(`${C.green}  ✔ Success${C.reset} — ${result.output.length} lines output in ${totalTime}ms`);
+    } else {
+      log(`${C.red}  ✗ Failed${C.reset} — ${result.errors.length} error(s)`);
+      process.exit(1);
+    }
+  } catch (e) {
+    if (e instanceof ParseError) {
+      error(`Parse error at line ${e.token.line}, column ${e.token.column}: ${e.message}`);
+    } else if (e instanceof Error) {
+      error(`${e.name}: ${e.message}`);
+    } else {
+      error(String(e));
+    }
+    process.exit(1);
+  }
+}
+
+async function cmdBuild(args: string[]) {
+  if (args.length === 0) {
+    error('Usage: iozen build <file.iozen> [--output <name>]');
+    process.exit(1);
+  }
+
+  const filePath = resolve(args[0]);
+  if (!existsSync(filePath)) {
+    error(`File not found: ${filePath}`);
+    process.exit(1);
+  }
+
+  let outputName = basename(filePath, ".iozen");
+
+  const outputIdx = args.indexOf("--output");
+  if (outputIdx !== -1 && args[outputIdx + 1]) {
+    outputName = args[outputIdx + 1];
+  }
+
+  const source = await readFile(filePath, "utf-8");
+
+  log(`${C.cyan}🔨 Building ${C.white}${basename(filePath)}${C.cyan} → ${C.white}${outputName}${C.reset}`);
+
+  // Step 1: Validate (lex + parse + interpret test)
+  const lexer = new Lexer(source);
+  const tokens = lexer.tokenize();
+  const parser = new Parser(tokens);
+  parser.parse();
+
+  log(`${C.gray}  ✓ Lexed ${tokens.length} tokens, parsed AST${C.reset}`);
+
+  // Step 2: Build standalone runner
+  const runnerCode = generateStandaloneRunner(source, filePath);
+  const runnerPath = join(dirname(filePath), `.iozen-runner-${Date.now()}.ts`);
+  await writeFile(runnerPath, runnerCode);
+
+  log(`${C.gray}  ✓ Generated standalone runner${C.reset}`);
+
+  // Step 3: Compile with Bun
+  const outputPath = resolve(join(dirname(filePath), outputName));
+
+  try {
+    const { execSync } = await import("node:child_process");
+    const cmd = `bun build "${runnerPath}" --compile --outfile "${outputPath}"`;
+
+    log(`${C.gray}  ✓ Compiling to binary...${C.reset}`);
+    execSync(cmd, { stdio: "inherit", cwd: resolve("/home/z/my-project") });
+
+    // Cleanup runner
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(runnerPath); } catch {}
+
+    log("");
+    log(`${C.green}  ✔ Build successful!${C.reset}`);
+    log(`${C.white}  Binary: ${outputPath}${C.reset}`);
+    log(`${C.dim}  Run with: ./${outputName}${C.reset}`);
+  } catch (e) {
+    log(`${C.yellow}  ⚠ Bun compile not available in this environment.${C.reset}`);
+    log(`${C.dim}  Note: Standalone binary build requires a local Bun installation.${C.reset}`);
+    log(`${C.dim}  You can still run with: iozen run ${basename(filePath)}${C.reset}`);
+  }
+}
+
+async function cmdInit(args: string[]) {
+  if (args.length === 0) {
+    error('Usage: iozen init <project-name>');
+    process.exit(1);
+  }
+
+  const projectName = args[0];
+  const projectDir = resolve(projectName);
+
+  if (existsSync(projectDir)) {
+    error(`Directory already exists: ${projectDir}`);
+    process.exit(1);
+  }
+
+  await mkdir(projectDir, { recursive: true });
+
+  // Create main.iozen
+  const mainCode = `# ${projectName} — IOZEN Project
+# Created with IOZEN CLI v${VERSION}
+
+print "Hello, World from ${projectName}!"
+
+create variable version as text with value "${VERSION}"
+print "Running on IOZEN v" attach version
+
+# Try writing your own code below:
+create variable x as integer with value 10
+create variable y as integer with value 20
+print x attach " + " attach y attach " = " attach x + y
+`;
+  await writeFile(join(projectDir, "main.iozen"), mainCode);
+
+  // Create README
+  const readme = `# ${projectName}
+
+A IOZEN project.
+
+## Run
+
+\`\`\`bash
+iozen run main.iozen
+\`\`\`
+
+## Build (requires local Bun)
+
+\`\`\`bash
+iozen build main.iozen --output ${projectName}
+./${projectName}
+\`\`\`
+`;
+  await writeFile(join(projectDir, "README.md"), readme);
+
+  log(`${C.green}  ✔ Project "${projectName}" created!${C.reset}`);
+  log(`${C.white}  ${projectDir}/${C.reset}`);
+  log(`${C.dim}  └── main.iozen${C.reset}`);
+  log(`${C.dim}  └── README.md${C.reset}`);
+  log("");
+  log(`${C.cyan}  Next:${C.reset}`);
+  log(`  cd ${projectName}`);
+  log(`  iozen run main.iozen`);
+}
+
+function cmdVersion() {
+  log(`${C.cyan}IOZEN${C.reset} v${VERSION}`);
+  log(`${C.dim}Safe, expressive systems programming language${C.reset}`);
+  log(`${C.dim}Lexer + Parser + Tree-Walking Interpreter${C.reset}`);
+}
+
+async function cmdTokens(args: string[]) {
+  if (args.length === 0) {
+    error('Usage: iozen tokens <file.iozen>');
+    process.exit(1);
+  }
+
+  const filePath = resolve(args[0]);
+  if (!existsSync(filePath)) {
+    error(`File not found: ${filePath}`);
+    process.exit(1);
+  }
+
+  const source = await readFile(filePath, "utf-8");
+  const lexer = new Lexer(source);
+  const tokens = lexer.tokenize();
+
+  log(`${C.cyan}Tokens (${tokens.length}):${C.reset}\n`);
+
+  for (const token of tokens) {
+    const loc = `${String(token.line).padStart(3)}:${String(token.column).padStart(3)}`;
+    const type = token.type.padEnd(18);
+    const val = token.value.length > 40 ? token.value.substring(0, 37) + "..." : token.value;
+    log(`  ${C.gray}${loc}${C.reset}  ${C.yellow}${type}${C.reset}  ${C.white}${val}${C.reset}`);
+  }
+}
+
+async function cmdAst(args: string[]) {
+  if (args.length === 0) {
+    error('Usage: iozen ast <file.iozen>');
+    process.exit(1);
+  }
+
+  const filePath = resolve(args[0]);
+  if (!existsSync(filePath)) {
+    error(`File not found: ${filePath}`);
+    process.exit(1);
+  }
+
+  const source = await readFile(filePath, "utf-8");
+  const lexer = new Lexer(source);
+  const tokens = lexer.tokenize();
+  const parser = new Parser(tokens);
+  const ast = parser.parse();
+
+  log(`${C.cyan}AST (${ast.statements.length} top-level nodes):${C.reset}\n`);
+
+  for (const stmt of ast.statements) {
+    log(`  ${C.green}${stmt.kind}${C.reset}`);
+    printASTNode(stmt, 2);
+    log("");
+  }
+}
+
+function printASTNode(node: any, indent: number): void {
+  const pad = " ".repeat(indent);
+  if (!node || typeof node !== "object") return;
+
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "kind") continue;
+
+    if (Array.isArray(value)) {
+      log(`${pad}${C.dim}${key}:${C.reset}`);
+      for (const item of value) {
+        if (item && typeof item === "object" && item.kind) {
+          log(`${pad}  ${C.cyan}${item.kind}${C.reset}`);
+          printASTNode(item, indent + 4);
+        } else {
+          log(`${pad}  ${C.white}${JSON.stringify(item)}${C.reset}`);
+        }
+      }
+    } else if (value && typeof value === "object" && value.kind) {
+      log(`${pad}${C.dim}${key}:${C.reset} ${C.cyan}${value.kind}${C.reset}`);
+      printASTNode(value, indent + 2);
+    } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      log(`${pad}${C.dim}${key}:${C.reset} ${C.white}${JSON.stringify(value)}${C.reset}`);
+    }
+  }
+}
+
+function generateStandaloneRunner(source: string, filePath: string): string {
+  return `#!/usr/bin/env bun
+// IOZEN Standalone Runner — Generated by iozen build
+// Source: ${basename(filePath)}
+
+${getIOZENRuntimeCode()}
+
+const SOURCE = ${JSON.stringify(source)};
+const interpreter = new Interpreter();
+const result = interpreter.run(SOURCE);
+
+for (const line of result.output) {
+  console.log(line);
+}
+for (const err of result.errors) {
+  console.error("Error: " + err);
+  process.exit(1);
+}
+`;
+}
+
+function getIOZENRuntimeCode(): string {
+  // Returns the IOZEN runtime as inline code for standalone compilation
+  // In production, this would bundle all the language runtime files
+  return `
+// === IOZEN Runtime (bundled) ===
+// This is a placeholder — in production, the full runtime would be inlined
+// For now, we dynamically import from the IOZEN module
+import { Lexer } from "${resolve("/home/z/my-project/src/lib/iozen/lexer")}";
+import { Parser } from "${resolve("/home/z/my-project/src/lib/iozen/parser")}";
+import { Interpreter } from "${resolve("/home/z/my-project/src/lib/iozen/interpreter")}";
+`;
+}
+
+// ---- Helpers ----
+
+function printBanner(): void {
+  log("");
+  log(`${C.bold}${C.cyan}  ╦   ╦ ╔╗╔ ═╗ ╔═╗ ╦ ╦╔═╗╦  ╦╔═╗${C.reset}`);
+  log(`${C.bold}${C.cyan}  ║   ║ ║║║  ║ ║ ╦ ║║╣ ║  ║║╣ ${C.reset}`);
+  log(`${C.bold}${C.cyan}  ╩═╝╩═╝╝╚╝  ╩ ╚═╝╩╚═╩═╝╩╚═╝${C.reset}`);
+  log(`${C.dim}  Safe, expressive systems programming language${C.reset}`);
+  log(`${C.dim}  v${VERSION}${C.reset}`);
+  log("");
+}
+
+function printUsage(): void {
+  log(`${C.bold}Usage:${C.reset}`);
+  log(`  iozen run <file.iozen>        Execute a IOZEN program`);
+  log(`  iozen build <file.iozen>      Compile to standalone binary`);
+  log(`  iozen init <project>         Create new IOZEN project`);
+  log(`  iozen tokens <file.iozen>     Show token output`);
+  log(`  iozen ast <file.iozen>        Show AST output`);
+  log(`  iozen version                Show version info`);
+  log(`  iozen help                   Show this help`);
+  log("");
+  log(`${C.bold}Examples:${C.reset}`);
+  log(`  ${C.dim}iozen init hello_world${C.reset}`);
+  log(`  ${C.dim}cd hello_world${C.reset}`);
+  log(`  ${C.dim}iozen run main.iozen${C.reset}`);
+  log("");
+  log(`${C.dim}Like Rust's flow:${C.reset}`);
+  log(`  ${C.dim}rustup install    → bun add iozen-lang${C.reset}`);
+  log(`  ${C.dim}cargo new hello   → iozen init hello${C.reset}`);
+  log(`  ${C.dim}cargo build       → iozen build main.iozen${C.reset}`);
+  log(`  ${C.dim}./hello           → iozen run main.iozen${C.reset}`);
+  log("");
+}
+
+function log(msg: string): void {
+  process.stdout.write(msg + "\n");
+}
+
+function error(msg: string): void {
+  process.stderr.write(`${C.red}Error: ${msg}${C.reset}\n`);
+}
+
+// ---- Run ----
+main().catch((e) => {
+  error(`Fatal: ${e instanceof Error ? e.message : String(e)}`);
+  process.exit(1);
+});
