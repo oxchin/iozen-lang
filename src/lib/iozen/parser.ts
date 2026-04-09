@@ -941,6 +941,7 @@ export class Parser {
 
   private parseComparison(): ASTNode {
     let left = this.parseAdditive();
+    let matched = false;
 
     const compOps = [
       TokenType.Equals, TokenType.NotEquals,
@@ -948,34 +949,37 @@ export class Parser {
       TokenType.LessOrEqual, TokenType.GreaterOrEqual,
     ];
 
+    // Symbol comparison operators: ==, !=, <, >, <=, >=
     if (compOps.includes(this.peek().type)) {
       const op = this.parseComparisonOp();
       const right = this.parseAdditive();
       left = { kind: 'BinaryExpr', left, operator: op, right } as BinaryExprNode;
+      matched = true;
     }
 
-    // Support "is" keyword for comparisons
-    if (this.check(TokenType.Is)) {
+    // "is" keyword for comparisons: x is greater than 5, x equals 10
+    if (!matched && this.check(TokenType.Is)) {
       this.advance();
       const op = this.parseComparisonOp();
       const right = this.parseAdditive();
       left = { kind: 'BinaryExpr', left, operator: op, right } as BinaryExprNode;
+      matched = true;
     }
 
-    // Support "equals", "greater than", "less than" etc. as direct comparison operators
-    // (without preceding "is")
-    if (this.check(TokenType.Equal) || this.check(TokenType.Greater) || this.check(TokenType.Less)) {
+    // NL comparison keywords without preceding "is": x equals 10, x greater than 5
+    if (!matched && (this.check(TokenType.Equal) || this.check(TokenType.Greater) || this.check(TokenType.Less))) {
       const op = this.parseComparisonOp();
       const right = this.parseAdditive();
       left = { kind: 'BinaryExpr', left, operator: op, right } as BinaryExprNode;
+      matched = true;
     }
-    if (this.check(TokenType.Identifier)) {
-      const word = this.peek().value.toLowerCase();
-      if (['equals', 'greater', 'less', 'not', 'equal'].includes(word)) {
-        const op = this.parseComparisonOp();
-        const right = this.parseAdditive();
-        left = { kind: 'BinaryExpr', left, operator: op, right } as BinaryExprNode;
-      }
+
+    // "inside" keyword for membership: x inside [1, 2, 3]
+    if (!matched && this.check(TokenType.Inside)) {
+      this.advance();
+      const right = this.parseAdditive();
+      left = { kind: 'BinaryExpr', left, operator: 'inside', right } as BinaryExprNode;
+      matched = true;
     }
 
     return left;
@@ -984,7 +988,7 @@ export class Parser {
   private parseComparisonOp(): string {
     const token = this.peek();
 
-    // Symbol operators
+    // Symbol operators (highest priority)
     if (token.type === TokenType.Equals) { this.advance(); return '=='; }
     if (token.type === TokenType.NotEquals) { this.advance(); return '!='; }
     if (token.type === TokenType.LessThan) { this.advance(); return '<'; }
@@ -992,54 +996,35 @@ export class Parser {
     if (token.type === TokenType.LessOrEqual) { this.advance(); return '<='; }
     if (token.type === TokenType.GreaterOrEqual) { this.advance(); return '>='; }
 
-    // Natural language operators (for "when x is ...")
-    if (token.type === TokenType.Identifier || token.type === TokenType.Greater || token.type === TokenType.Less) {
-      const word = token.value.toLowerCase();
-      if (word === 'greater' || token.type === TokenType.Greater) {
-        this.advance();
-        if (this.check(TokenType.Than)) this.advance();
-        // Check for "or equal to"
-        if (this.check(TokenType.Or)) {
-          this.advance(); // or
-          if (this.check(TokenType.Equal) || (this.check(TokenType.Identifier) && this.peek().value.toLowerCase() === 'equal')) this.advance();
-          if (this.check(TokenType.To)) this.advance();
-          return '>=';
-        }
-        return '>';
-      }
-      if (word === 'less' || token.type === TokenType.Less) {
-        this.advance();
-        if (this.check(TokenType.Than)) this.advance();
-        // Check for "or equal to"
-        if (this.check(TokenType.Or)) {
-          this.advance(); // or
-          if (this.check(TokenType.Equal) || (this.check(TokenType.Identifier) && this.peek().value.toLowerCase() === 'equal')) this.advance();
-          if (this.check(TokenType.To)) this.advance();
-          return '<=';
-        }
-        return '<';
-      }
-      if (word === 'equal') {
-        this.advance();
-        if (this.check(TokenType.To)) this.advance();
-        return '==';
-      }
-      if (word === 'not' || token.type === TokenType.Not) {
+    // Natural language operators (tokenized as keywords: Greater, Less, Equal, Not)
+    if (token.type === TokenType.Greater) {
+      this.advance();
+      if (this.check(TokenType.Than)) this.advance();
+      // Check for "or equal to"
+      if (this.check(TokenType.Or)) {
         this.advance();
         if (this.check(TokenType.Equal) || (this.check(TokenType.Identifier) && this.peek().value.toLowerCase() === 'equal')) this.advance();
         if (this.check(TokenType.To)) this.advance();
-        return '!=';
+        return '>=';
       }
+      return '>';
     }
-
-    // "equals" and "equal" as standalone keywords (tokenized as TokenType.Equal)
+    if (token.type === TokenType.Less) {
+      this.advance();
+      if (this.check(TokenType.Than)) this.advance();
+      if (this.check(TokenType.Or)) {
+        this.advance();
+        if (this.check(TokenType.Equal) || (this.check(TokenType.Identifier) && this.peek().value.toLowerCase() === 'equal')) this.advance();
+        if (this.check(TokenType.To)) this.advance();
+        return '<=';
+      }
+      return '<';
+    }
     if (token.type === TokenType.Equal) {
       this.advance();
       if (this.check(TokenType.To)) this.advance();
       return '==';
     }
-
-    // "not" as standalone keyword (tokenized as TokenType.Not)
     if (token.type === TokenType.Not) {
       this.advance();
       if (this.check(TokenType.Equal) || (this.check(TokenType.Identifier) && this.peek().value.toLowerCase() === 'equal')) this.advance();
@@ -1047,10 +1032,42 @@ export class Parser {
       return '!=';
     }
 
-    // Handle "equals" keyword (BooleanLiteral "true"/"false" handling)
-    if (token.type === TokenType.Equals) {
-      this.advance();
-      return '==';
+    // Identifier-based NL operators ("equals", "greater", "less", "not", "equal")
+    if (token.type === TokenType.Identifier) {
+      const word = token.value.toLowerCase();
+      if (word === 'greater') {
+        this.advance();
+        if (this.check(TokenType.Than)) this.advance();
+        if (this.check(TokenType.Or)) {
+          this.advance();
+          if (this.check(TokenType.Equal) || (this.check(TokenType.Identifier) && this.peek().value.toLowerCase() === 'equal')) this.advance();
+          if (this.check(TokenType.To)) this.advance();
+          return '>=';
+        }
+        return '>';
+      }
+      if (word === 'less') {
+        this.advance();
+        if (this.check(TokenType.Than)) this.advance();
+        if (this.check(TokenType.Or)) {
+          this.advance();
+          if (this.check(TokenType.Equal) || (this.check(TokenType.Identifier) && this.peek().value.toLowerCase() === 'equal')) this.advance();
+          if (this.check(TokenType.To)) this.advance();
+          return '<=';
+        }
+        return '<';
+      }
+      if (word === 'equals' || word === 'equal') {
+        this.advance();
+        if (this.check(TokenType.To)) this.advance();
+        return '==';
+      }
+      if (word === 'not') {
+        this.advance();
+        if (this.check(TokenType.Equal) || (this.check(TokenType.Identifier) && this.peek().value.toLowerCase() === 'equal')) this.advance();
+        if (this.check(TokenType.To)) this.advance();
+        return '!=';
+      }
     }
 
     throw new ParseError(`Expected comparison operator, got ${token.value}`, token);

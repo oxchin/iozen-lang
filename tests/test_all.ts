@@ -2002,6 +2002,550 @@ print not (x equals 10)`);
 });
 
 // ============================================================
+// Inside Keyword Tests
+// ============================================================
+
+test('inside: integer inside list', () => {
+  const r = run(`create variable fruits as list with value ["apple", "banana", "cherry"]
+print "banana" inside fruits
+print "grape" inside fruits`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('inside: number inside list', () => {
+  const r = run(`create variable nums as list with value [10, 20, 30, 40, 50]
+print 30 inside nums
+print 99 inside nums`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('inside: character inside string', () => {
+  const r = run(`print "hello" inside "say hello world"`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+});
+
+test('inside: key inside map', () => {
+  const r = run(`create variable m as map with value {"name": "Alice", "age": 30}
+print "name" inside m
+print "email" inside m`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('inside: inside in when condition', () => {
+  const r = run(`create variable allowed as list with value [1, 2, 3, 4, 5]
+create variable x as integer with value 3
+when x inside allowed do
+    print "allowed"
+otherwise do
+    print "blocked"
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'allowed');
+});
+
+// ============================================================
+// Recursion Depth Limit Tests
+// ============================================================
+
+test('recursion: normal recursion works', () => {
+  const r = run(`function fib with n as integer returns integer
+    when n is less than or equal to 1 do
+        return n
+    end
+    create variable a as integer with value fib with n - 1
+    create variable b as integer with value fib with n - 2
+    return a + b
+end
+print fib with 10`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '55');
+});
+
+test('recursion: infinite recursion caught', () => {
+  const r = run(`function infinite with x as integer returns integer
+    return infinite with x
+end
+infinite with 1`);
+  assert(r.errors.length >= 1);
+  assert(r.errors[0].includes('Maximum call depth'));
+});
+
+// ============================================================
+// ForceUnwrap & OrDefault Tests
+// ============================================================
+
+test('force-unwrap: unwrap valid value', () => {
+  const r = run(`create variable x as integer with value 42
+print x`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '42');
+});
+
+test('or-default: value present returns it', () => {
+  const r = run(`create variable x as integer with value 10
+when x inside [1, 2, 3] do
+    print x
+otherwise do
+    print 0
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '0');
+});
+
+test('or-default: null value falls to default', () => {
+  const r = run(`create variable x as nothing
+when x equals nothing do
+    print "was null"
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'was null');
+});
+
+// ============================================================
+// Increase with Member Access Tests
+// ============================================================
+
+test('increase: basic increase', () => {
+  const r = run(`create variable x as integer with value 10
+increase x by 5
+print x`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '15');
+});
+
+test('increase: increase in loop', () => {
+  const r = run(`create variable sum as integer with value 0
+repeat 5 times do
+    increase sum by 1
+end
+print sum`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '5');
+});
+
+test('decrease: basic decrease', () => {
+  const r = run(`create variable x as integer with value 10
+decrease x by 3
+print x`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '7');
+});
+
+// ============================================================
+// Type Of Builtin Tests
+// ============================================================
+
+test('type_of: integer', () => {
+  const r = run(`print type_of with 42`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'integer');
+});
+
+test('type_of: text', () => {
+  const r = run(`print type_of with "hello"`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'text');
+});
+
+test('type_of: float', () => {
+  const r = run(`print type_of with 3.14`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'float');
+});
+
+test('type_of: boolean', () => {
+  const r = run(`print type_of with true`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'boolean');
+});
+
+test('type_of: nothing', () => {
+  const r = run(`print type_of with nothing`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'nothing');
+});
+
+test('type_of: list', () => {
+  const r = run(`print type_of with [1, 2, 3]`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'list');
+});
+
+test('type_of: map', () => {
+  const r = run(`create variable m as map with value {"key": "val"}
+print type_of with m`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'map');
+});
+
+// ============================================================
+// Map Builtins Tests
+// ============================================================
+
+test('map: keys builtin', () => {
+  const r = run(`create variable m as map with value {"x": 1, "y": 2, "z": 3}
+create variable k as list with value keys(m)
+sort(k)
+print k`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'x');
+  assertIncludes(r.output, 'y');
+  assertIncludes(r.output, 'z');
+});
+
+test('map: has_key builtin', () => {
+  const r = run(`create variable m as map with value {"name": "Alice"}
+print has_key with m and "name"
+print has_key with m and "email"`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('map: remove_key builtin', () => {
+  const r = run(`create variable m as map with value {"a": 1, "b": 2, "c": 3}
+remove_key(m, "b")
+print has_key with m and "b"
+print has_key with m and "a"`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'false');
+  assertIncludes(r.output, 'true');
+});
+
+test('map: values builtin', () => {
+  const r = run(`create variable m as map with value {"x": 10, "y": 20}
+create variable v as list with value values(m)
+print v`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '10');
+  assertIncludes(r.output, '20');
+});
+
+// ============================================================
+// List Builtins Tests
+// ============================================================
+
+test('list: first and last', () => {
+  const r = run(`create variable nums as list with value [10, 20, 30, 40, 50]
+print first(nums)
+print last(nums)`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '10');
+  assertIncludes(r.output, '50');
+});
+
+test('list: chunk', () => {
+  const r = run(`create variable nums as list with value [1, 2, 3, 4, 5, 6]
+create variable chunks as list with value chunk(nums, 2)
+print chunks`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '1, 2');
+  assertIncludes(r.output, '3, 4');
+  assertIncludes(r.output, '5, 6');
+});
+
+test('list: flatten', () => {
+  const r = run(`create variable nested as list with value [[1, 2], [3, 4], [5]]
+create variable flat as list with value flatten(nested)
+print flat`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '1, 2, 3, 4, 5');
+});
+
+test('list: unique', () => {
+  const r = run(`create variable items as list with value [1, 2, 2, 3, 3, 3, 4]
+create variable u as list with value unique(items)
+print u`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '1, 2, 3, 4');
+});
+
+test('list: any and all', () => {
+  const r = run(`function is_even with n as integer returns boolean
+    return n % 2 equals 0
+end
+create variable nums as list with value [2, 4, 6, 8]
+print "all even: " attach all(nums, is_even)
+create variable mixed as list with value [1, 2, 3, 4]
+print "any even: " attach any(mixed, is_even)`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'all even: true');
+  assertIncludes(r.output, 'any even: true');
+});
+
+test('list: reduce', () => {
+  const r = run(`function adder with acc as integer and item as integer returns integer
+    return acc + item
+end
+create variable nums as list with value [1, 2, 3, 4, 5]
+create variable total as integer with value reduce(nums, adder, 0)
+print total`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '15');
+});
+
+// ============================================================
+// String Builtins Tests
+// ============================================================
+
+test('string: starts_with and ends_with', () => {
+  const r = run(`print starts_with with "hello world" and "hello"
+print ends_with with "hello world" and "world"
+print starts_with with "hello world" and "world"`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('string: reverse_str', () => {
+  const r = run(`print reverse_str with "hello"`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'olleh');
+});
+
+test('string: repeat_str', () => {
+  const r = run(`print repeat_str with "ab" and 3`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'ababab');
+});
+
+test('string: pad_left and pad_right', () => {
+  const r = run(`print pad_left with "42" and 5 and "0"
+print pad_right with "hi" and 5 and "-"`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '00042');
+  assertIncludes(r.output, 'hi---');
+});
+
+test('string: lines builtin', () => {
+  const r = run(`create variable text as text with value "line1
+line2
+line3"
+create variable lns as list with value lines(text)
+print length(lns)`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '3');
+});
+
+// ============================================================
+// Comparison Double-Match Prevention Tests
+// ============================================================
+
+test('comparison: no double match on equals', () => {
+  const r = run(`create variable x as integer with value 5
+when x equals 5 do
+    print "five"
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'five');
+});
+
+test('comparison: chained comparison does not double-fire', () => {
+  const r = run(`create variable x as integer with value 10
+print x equals 10`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+});
+
+test('comparison: greater than or equal NL syntax', () => {
+  const r = run(`create variable x as integer with value 5
+print x greater or equal to 5
+print x greater or equal to 6`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('comparison: less than or equal NL syntax', () => {
+  const r = run(`create variable x as integer with value 3
+print x less or equal to 3
+print x less or equal to 2`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+test('comparison: not equal NL syntax', () => {
+  const r = run(`create variable x as integer with value 5
+print x != 10
+print x != 5`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, 'false');
+});
+
+// ============================================================
+// Edge Case Tests
+// ============================================================
+
+test('edge-case: empty list operations', () => {
+  const r = run(`create variable empty as list with value []
+print length(empty)
+print first(empty)
+print last(empty)
+print sum(empty)`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '0');
+  assertEqual(r.output[1], 'nothing');
+  assertEqual(r.output[2], 'nothing');
+  assertIncludes(r.output, '0');
+});
+
+test('edge-case: nested function calls', () => {
+  const r = run(`function add with a as integer and b as integer returns integer
+    return a + b
+end
+function double with x as integer returns integer
+    return add with x and x
+end
+print double with 5`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '10');
+});
+
+test('edge-case: string interpolation with expressions', () => {
+  const r = run(`create variable name as text with value "World"
+create variable count as integer with value 42
+print "Hello, {name}! Count = {count}"`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'Hello, World! Count = 42');
+});
+
+test('edge-case: ternary expression', () => {
+  const r = run(`create variable x as integer with value 10
+print ("big" when x greater than 5 otherwise "small")`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'big');
+});
+
+test('edge-case: pipeline operator', () => {
+  const r = run(`create variable nums as list with value [5, 3, 1, 4, 2]
+print nums |> sort`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '1, 2, 3, 4, 5');
+});
+
+test('edge-case: list comprehension', () => {
+  const r = run(`create variable nums as list with value [1, 2, 3, 4, 5]
+create variable squares as list with value [x * x for each x in nums]
+print squares`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '1, 4, 9, 16, 25');
+});
+
+test('edge-case: match expression as value', () => {
+  const r = run(`function describe with n as integer returns text
+    create variable result as text with value match n
+        case 1 do
+            print "one"
+        end
+        case 2 do
+            print "two"
+        end
+        otherwise do
+            print "other"
+        end
+    return result
+end
+describe with 1
+describe with 2
+describe with 99`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'one');
+  assertIncludes(r.output, 'two');
+  assertIncludes(r.output, 'other');
+});
+
+test('edge-case: try-catch with throw', () => {
+  const r = run(`try do
+    throw "something went wrong"
+catch error do
+    print "caught: " attach error
+end`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'caught: something went wrong');
+});
+
+test('edge-case: multiline string', () => {
+  const r = run(`create variable s as text with value """hello
+world"""
+print s`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'hello');
+  assertIncludes(r.output, 'world');
+});
+
+test('edge-case: compound assignment operators', () => {
+  const r = run(`create variable x as integer with value 10
+x += 5
+print x
+x -= 3
+print x
+x *= 2
+print x`);
+  assertEqual(r.errors.length, 0);
+  assert(r.output[0].includes('15'));
+  assert(r.output[1].includes('12'));
+  assert(r.output[2].includes('24'));
+});
+
+test('edge-case: nested when inside loop', () => {
+  const r = run(`create variable i as integer with value 0
+while i is less than 3 do
+    when i equals 0 do
+        print "zero"
+    otherwise when i equals 1 do
+        print "one"
+    otherwise do
+        print "other"
+    end
+    increase i by 1
+end`);
+  assertEqual(r.errors.length, 0);
+  assert(r.output[0].includes('zero'));
+  assert(r.output[1].includes('one'));
+  assert(r.output[2].includes('other'));
+});
+
+test('edge-case: closure captures variable', () => {
+  const r = run(`function make_adder with base as integer returns nothing
+    create variable result as integer with value base + 10
+    print result
+end
+make_adder with 5`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, '15');
+});
+
+test('edge-case: map literal and access', () => {
+  const r = run(`create variable config as map with value {"debug": true, "port": 8080}
+print config.debug
+print config.port`);
+  assertEqual(r.errors.length, 0);
+  assertIncludes(r.output, 'true');
+  assertIncludes(r.output, '8080');
+});
+
+test('edge-case: destructuring list', () => {
+  const r = run(`create variable a, b, c as list with value [10, 20, 30]
+print a
+print b
+print c`);
+  assertEqual(r.errors.length, 0);
+  assert(r.output[0].includes('10'));
+  assert(r.output[1].includes('20'));
+  assert(r.output[2].includes('30'));
+});
+
+// ============================================================
 // SUMMARY
 // ============================================================
 

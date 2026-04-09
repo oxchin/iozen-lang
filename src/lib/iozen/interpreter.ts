@@ -41,6 +41,8 @@ export class Interpreter {
   private output: string[] = [];
   private maxIterations: number = 100000;
   private iterationCount: number = 0;
+  private callDepth: number = 0;
+  private maxCallDepth: number = 500;
   private structureDefs: Map<string, { fields: { name: string; typeName: string }[] }> = new Map();
   private source: string = '';
   private sourceLines: string[] = [];
@@ -781,13 +783,24 @@ export class Interpreter {
   }
 
   private execIncrease(node: IncreaseNode, env: Environment): void {
-    const target = this.evaluate(node.target, env);
     const amount = this.toNumber(this.evaluate(node.amount, env));
 
     if (node.target.kind === 'Identifier') {
       const name = (node.target as IdentifierNode).name;
       const current = this.toNumber(env.get(name));
       env.set(name, current + amount);
+    } else if (node.target.kind === 'MemberAccess') {
+      const member = node.target as MemberAccessNode;
+      const obj = this.evaluate(member.object, env) as IOZENObject;
+      const current = this.toNumber(obj[member.field]);
+      obj[member.field] = current + amount;
+    } else if (node.target.kind === 'IndexAccess') {
+      const idx = node.target as IndexAccessNode;
+      const obj = this.evaluate(idx.object, env);
+      const i = Math.floor(this.toNumber(this.evaluate(idx.index, env)));
+      if (Array.isArray(obj)) {
+        obj[i] = this.toNumber(obj[i]) + amount;
+      }
     }
   }
 
@@ -995,12 +1008,30 @@ export class Interpreter {
         const s = node as SafeAccessNode;
         const obj = this.evaluate(s.object, env);
         if (obj === null || obj === undefined) {
-          return null; // Safe access returns nothing on null
+          return null;
         }
         if (typeof obj === 'object' && s.field in obj) {
           return (obj as Record<string, IOZENValue>)[s.field];
         }
-        return null; // Safe access returns nothing if field doesn't exist
+        return null;
+      }
+
+      case 'ForceUnwrap': {
+        const f = node as ForceUnwrapNode;
+        const val = this.evaluate(f.expression, env);
+        if (val === null || val === undefined) {
+          throw new RuntimeError('Force unwrap on null value (value has nothing)');
+        }
+        return val;
+      }
+
+      case 'OrDefault': {
+        const o = node as OrDefaultNode;
+        const val = this.evaluate(o.expression, env);
+        if (val === null || val === undefined) {
+          return this.evaluate(o.defaultValue, env);
+        }
+        return val;
       }
 
       case 'Throw': {
@@ -1042,6 +1073,19 @@ export class Interpreter {
       case '>=': return this.toNumber(left) >= this.toNumber(right);
       case 'and': return this.isTruthy(left) && this.isTruthy(right);
       case 'or': return this.isTruthy(left) || this.isTruthy(right);
+      case 'inside': {
+        // Membership: value inside collection
+        if (Array.isArray(right)) {
+          return right.some(item => this.iozenValuesEqual(left, item));
+        }
+        if (typeof right === 'string') {
+          return String(right).includes(String(left));
+        }
+        if (typeof right === 'object' && right !== null && !Array.isArray(right) && (right as IOZENMap).__iozen_type === 'map') {
+          return String(left) in (right as Record<string, IOZENValue>);
+        }
+        return false;
+      }
       default:
         throw new RuntimeError(`Unknown operator: ${op}`, ...this.findNodeLine(op));
     }
@@ -1105,15 +1149,18 @@ export class Interpreter {
         funcEnv.define(func.parameters[i].name, args[i]);
       }
 
-      // Execute body
+      // Execute body (with recursion depth tracking)
+      this.callDepth++;
       try {
         this.executeBlock(func.body, funcEnv);
       } catch (e) {
+        this.callDepth--;
         if (e instanceof ReturnSignal) {
           return e.value;
         }
         throw e;
       }
+      this.callDepth--;
 
       return null;
     }
@@ -1954,8 +2001,10 @@ export class Interpreter {
     }
     if (n === 'any' && args.length >= 2 && Array.isArray(args[0])) {
       const arr = args[0] as IOZENValue[];
-      const funcName = String(args[1]);
-      const func = env.get(funcName) as IOZENFunction;
+      const rawArg = args[1];
+      const func = (rawArg && typeof rawArg === 'object' && rawArg.__iozen_type === 'function')
+        ? rawArg as IOZENFunction
+        : env.get(String(rawArg)) as IOZENFunction;
       if (func && func.__iozen_type === 'function') {
         for (const item of arr) {
           const funcEnv = func.closure.child();
@@ -1977,8 +2026,10 @@ export class Interpreter {
     }
     if (n === 'all' && args.length >= 2 && Array.isArray(args[0])) {
       const arr = args[0] as IOZENValue[];
-      const funcName = String(args[1]);
-      const func = env.get(funcName) as IOZENFunction;
+      const rawArg = args[1];
+      const func = (rawArg && typeof rawArg === 'object' && rawArg.__iozen_type === 'function')
+        ? rawArg as IOZENFunction
+        : env.get(String(rawArg)) as IOZENFunction;
       if (func && func.__iozen_type === 'function') {
         for (const item of arr) {
           const funcEnv = func.closure.child();
@@ -2000,9 +2051,11 @@ export class Interpreter {
     }
     if (n === 'reduce' && args.length >= 3 && Array.isArray(args[0])) {
       const arr = args[0] as IOZENValue[];
-      const funcName = String(args[1]);
+      const rawArg = args[1];
       let acc = args[2];
-      const func = env.get(funcName) as IOZENFunction;
+      const func = (rawArg && typeof rawArg === 'object' && rawArg.__iozen_type === 'function')
+        ? rawArg as IOZENFunction
+        : env.get(String(rawArg)) as IOZENFunction;
       if (func && func.__iozen_type === 'function') {
         for (const item of arr) {
           const funcEnv = func.closure.child();
@@ -2503,6 +2556,9 @@ export class Interpreter {
     this.iterationCount++;
     if (this.iterationCount > this.maxIterations) {
       throw new RuntimeError('Execution limit exceeded (possible infinite loop)');
+    }
+    if (this.callDepth > this.maxCallDepth) {
+      throw new RuntimeError(`Maximum call depth (${this.maxCallDepth}) exceeded (possible infinite recursion)`);
     }
   }
 
